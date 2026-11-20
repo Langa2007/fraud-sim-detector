@@ -1,0 +1,35 @@
+{
+  "description": "Balance drain (> 70%) outside 90-day baseline",
+  "input": {
+    "tenant_event_id": "evt_golden_drain_001",
+    "event_type": "funds_transfer",
+    "occurred_at": "2026-10-31T15:30:00+03:00",
+    "channel": "mobile_app",
+    "subject": {
+      "msisdn": "+254722000000",
+      "account_ref": "acc_7712"
+    },
+    "transaction": {
+      "amount": 150000,
+      "currency": "KES",
+      "rail": "pesalink",
+      "beneficiary": {
+        "type": "bank_account",
+        "ref": "ben_known_12"
+      }
+    },
+    "signals": {
+      "balance_drain_ratio": 0.85,
+      "device_first_seen": false,
+      "beneficiary_first_seen": false,
+      "telco_available": true
+    }
+  },
+  "expected": {
+    "decision": "HOLD",
+    "mode": "shadow",
+    "risk_band": "high",
+    "reason_codes": ["BALANCE_DRAIN_PATTERN"],
+    "recommended_actions": ["ALERT_FRAUD_TEAM", "RECOMMEND_HOLD"]
+  }
+}

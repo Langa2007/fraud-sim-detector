@@ -388,3 +388,179 @@ fn main() {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_policy() -> Policy {
+        Policy {
+            policy_version: "test-2026-1.0".into(),
+            mode: "shadow".into(),
+            score_bands: Bands {
+                medium: 0.2,
+                high: 0.35,
+                critical: 0.65,
+            },
+            rules: vec![
+                Rule {
+                    id: "swap_new_device_new_beneficiary".into(),
+                    reason: "SIM_SWAP_RECENT".into(),
+                    description: "Recent SIM swap with new device and beneficiary".into(),
+                    action: "STEP_UP".into(),
+                    weight: 0.4,
+                    threshold_kes: 50_000.0,
+                    sim_swap_age_minutes_lt: 1440,
+                    transfers_gte: 0,
+                    new_beneficiaries_gte: 0,
+                    window_minutes_lte: 0,
+                    drain_ratio_gte: 0.0,
+                    account_age_days_lt: 0,
+                    inbound_fan_in_gte: 0,
+                },
+                Rule {
+                    id: "balance_drain".into(),
+                    reason: "BALANCE_DRAIN_PATTERN".into(),
+                    description: "Large balance drain ratio".into(),
+                    action: "HOLD".into(),
+                    weight: 0.3,
+                    threshold_kes: 0.0,
+                    sim_swap_age_minutes_lt: 0,
+                    transfers_gte: 0,
+                    new_beneficiaries_gte: 0,
+                    window_minutes_lte: 0,
+                    drain_ratio_gte: 0.7,
+                    account_age_days_lt: 0,
+                    inbound_fan_in_gte: 0,
+                },
+                Rule {
+                    id: "overnight_activity".into(),
+                    reason: "OVERNIGHT_ACTIVITY".into(),
+                    description: "Activity during off-hours".into(),
+                    action: "STEP_UP".into(),
+                    weight: 0.15,
+                    threshold_kes: 0.0,
+                    sim_swap_age_minutes_lt: 0,
+                    transfers_gte: 0,
+                    new_beneficiaries_gte: 0,
+                    window_minutes_lte: 0,
+                    drain_ratio_gte: 0.0,
+                    account_age_days_lt: 0,
+                    inbound_fan_in_gte: 0,
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn test_allow_clean_transaction() {
+        let policy = test_policy();
+        let req = Request {
+            _tenant: "demo".into(),
+            event: Event {
+                tenant_event_id: "evt_clean_1".into(),
+                occurred_at: "2026-10-31T14:00:00+03:00".into(),
+                channel: "mobile_app".into(),
+                transaction: Transaction { amount: 500.0 },
+                signals: Signals {
+                    sim_swap_age_minutes: None,
+                    telco_available: Some(true),
+                    device_first_seen: false,
+                    beneficiary_first_seen: false,
+                    balance_drain_ratio: Some(0.1),
+                    ..Default::default()
+                },
+            },
+        };
+
+        let res = evaluate(&policy, req);
+        assert_eq!(res.decision, "ALLOW");
+        assert_eq!(res.risk_band, "low");
+        assert_eq!(res.risk_score, 0.0);
+        assert_eq!(res.mode, "shadow");
+        assert!(!res.degraded);
+        assert!(res.reasons.is_empty());
+    }
+
+    #[test]
+    fn test_sim_swap_triggers_step_up() {
+        let policy = test_policy();
+        let req = Request {
+            _tenant: "demo".into(),
+            event: Event {
+                tenant_event_id: "evt_swap_1".into(),
+                occurred_at: "2026-10-31T14:00:00+03:00".into(),
+                channel: "mobile_app".into(),
+                transaction: Transaction { amount: 60_000.0 },
+                signals: Signals {
+                    sim_swap_age_minutes: Some(38),
+                    telco_available: Some(true),
+                    device_first_seen: true,
+                    beneficiary_first_seen: true,
+                    ..Default::default()
+                },
+            },
+        };
+
+        let res = evaluate(&policy, req);
+        assert_eq!(res.decision, "STEP_UP");
+        assert_eq!(res.risk_band, "high");
+        assert_eq!(res.risk_score, 0.4);
+        assert_eq!(res.reasons.len(), 1);
+        assert_eq!(res.reasons[0].code, "SIM_SWAP_RECENT");
+    }
+
+    #[test]
+    fn test_sim_swap_plus_drain_critical_hold() {
+        let policy = test_policy();
+        let req = Request {
+            _tenant: "demo".into(),
+            event: Event {
+                tenant_event_id: "evt_critical_1".into(),
+                occurred_at: "2026-10-31T23:30:00+03:00".into(), // overnight
+                channel: "mobile_app".into(),
+                transaction: Transaction { amount: 100_000.0 },
+                signals: Signals {
+                    sim_swap_age_minutes: Some(15),
+                    telco_available: Some(true),
+                    device_first_seen: true,
+                    beneficiary_first_seen: true,
+                    balance_drain_ratio: Some(0.85),
+                    ..Default::default()
+                },
+            },
+        };
+
+        let res = evaluate(&policy, req);
+        assert_eq!(res.decision, "HOLD");
+        assert_eq!(res.risk_band, "critical");
+        assert!(res.risk_score >= 0.7);
+        // Should match SIM swap, balance drain, and overnight activity
+        assert_eq!(res.reasons.len(), 3);
+        assert!(res.recommended_actions.contains(&"ALERT_FRAUD_TEAM".to_string()));
+        assert!(res.recommended_actions.contains(&"RECOMMEND_HOLD".to_string()));
+    }
+
+    #[test]
+    fn test_degraded_mode_when_telco_unavailable() {
+        let policy = test_policy();
+        let req = Request {
+            _tenant: "demo".into(),
+            event: Event {
+                tenant_event_id: "evt_degraded_1".into(),
+                occurred_at: "2026-10-31T12:00:00+03:00".into(),
+                channel: "mobile_app".into(),
+                transaction: Transaction { amount: 1_000.0 },
+                signals: Signals {
+                    sim_swap_age_minutes: None,
+                    telco_available: Some(false),
+                    ..Default::default()
+                },
+            },
+        };
+
+        let res = evaluate(&policy, req);
+        assert!(res.degraded);
+        assert_eq!(res.decision, "ALLOW");
+    }
+}

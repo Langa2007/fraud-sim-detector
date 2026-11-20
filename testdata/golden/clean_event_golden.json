@@ -1,0 +1,35 @@
+{
+  "description": "Normal, clean routine transaction with known device and small amount",
+  "input": {
+    "tenant_event_id": "evt_golden_clean_001",
+    "event_type": "funds_transfer",
+    "occurred_at": "2026-10-31T11:15:00+03:00",
+    "channel": "mobile_app",
+    "subject": {
+      "msisdn": "+254722000000",
+      "account_ref": "acc_7712"
+    },
+    "transaction": {
+      "amount": 1500,
+      "currency": "KES",
+      "rail": "mpesa",
+      "beneficiary": {
+        "type": "wallet",
+        "ref": "ben_groceries"
+      }
+    },
+    "signals": {
+      "balance_drain_ratio": 0.05,
+      "device_first_seen": false,
+      "beneficiary_first_seen": false,
+      "telco_available": true
+    }
+  },
+  "expected": {
+    "decision": "ALLOW",
+    "mode": "shadow",
+    "risk_band": "low",
+    "reason_codes": [],
+    "recommended_actions": []
+  }
+}

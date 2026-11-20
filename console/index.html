@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Kinga Console — Shadow-Mode Intelligence</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <header class="header">
+      <div class="logo">
+        <span class="shield">🛡️</span>
+        <h1>Kinga <span>Console v0</span></h1>
+      </div>
+      <div class="mode-badge">
+        <span class="dot"></span> Mode: <strong>SHADOW (Read-Only)</strong>
+      </div>
+    </header>
+
+    <nav class="nav-tabs">
+      <button class="tab-btn active" data-tab="explorer">Decision Explorer</button>
+      <button class="tab-btn" data-tab="rules">Active Rules & Policy</button>
+      <button class="tab-btn" data-tab="report">Shadow-Mode Report</button>
+    </nav>
+
+    <main id="app" class="content-container"></main>
+
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>

@@ -1,0 +1,38 @@
+{
+  "description": "Recent SIM swap (< 24h) with newly seen device and beneficiary over threshold",
+  "input": {
+    "tenant_event_id": "evt_golden_swap_001",
+    "event_type": "funds_transfer",
+    "occurred_at": "2026-10-31T14:22:00+03:00",
+    "channel": "mobile_app",
+    "subject": {
+      "msisdn": "+254712345678",
+      "account_ref": "acc_8841"
+    },
+    "device": {
+      "device_id": "dvc_new_99"
+    },
+    "transaction": {
+      "amount": 75000,
+      "currency": "KES",
+      "rail": "pesalink",
+      "beneficiary": {
+        "type": "bank_account",
+        "ref": "ben_new_88"
+      }
+    },
+    "signals": {
+      "sim_swap_age_minutes": 38,
+      "device_first_seen": true,
+      "beneficiary_first_seen": true,
+      "telco_available": true
+    }
+  },
+  "expected": {
+    "decision": "STEP_UP",
+    "mode": "shadow",
+    "risk_band": "high",
+    "reason_codes": ["SIM_SWAP_RECENT"],
+    "recommended_actions": ["ALERT_FRAUD_TEAM", "RECOMMEND_STEP_UP"]
+  }
+}

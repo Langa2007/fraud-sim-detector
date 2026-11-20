@@ -1,9 +1,12 @@
 build:
     go build -o /tmp/kinga ./services/gateway/cmd
+    go build -o /tmp/kinga-ingest ./services/ingest/cmd
+    go build -o /tmp/evidence-verify ./tools/evidence-verify
     cargo build --manifest-path engine/Cargo.toml --release
 
 test:
-    go test ./...
+    go test -v ./...
+    cargo test --manifest-path engine/Cargo.toml
 
 lint:
     go vet ./...
@@ -20,6 +23,12 @@ replay events:
 ingest source destination:
     python3 tools/ingest/csv_to_jsonl.py {{source}} {{destination}}
     python3 tools/replay/replay.py {{destination}}
+
+ingest-go source destination:
+    go run ./services/ingest/cmd {{source}} {{destination}}
+
+verify-evidence path="data/evidence.jsonl":
+    go run ./tools/evidence-verify {{path}}
 
 synth count="1000" out="synthetic.jsonl":
     python3 tools/synth/generate.py --count {{count}} --out {{out}}
