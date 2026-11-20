@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Kinga Phase 1 shadow policy",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["policy_version", "mode", "score_bands", "rules"],
+  "properties": {
+    "policy_version": { "type": "string", "minLength": 1 },
+    "mode": { "const": "shadow" },
+    "description": { "type": "string" },
+    "score_bands": { "type": "object", "required": ["medium", "high", "critical"], "properties": { "medium": { "type": "number", "minimum": 0, "maximum": 1 }, "high": { "type": "number", "minimum": 0, "maximum": 1 }, "critical": { "type": "number", "minimum": 0, "maximum": 1 } } },
+    "rules": { "type": "array", "minItems": 1, "items": { "type": "object", "required": ["id", "reason", "description", "weight", "action"], "properties": { "id": { "enum": ["swap_new_device_new_beneficiary", "beneficiary_velocity", "balance_drain", "young_account_fan_in_out", "overnight_activity"] }, "reason": { "type": "string" }, "description": { "type": "string" }, "weight": { "type": "number", "minimum": 0, "maximum": 1 }, "action": { "enum": ["ALLOW", "STEP_UP", "HOLD"] }, "threshold_kes": { "type": "number", "minimum": 0 }, "sim_swap_age_minutes_lt": { "type": "integer", "minimum": 0 }, "transfers_gte": { "type": "integer", "minimum": 0 }, "new_beneficiaries_gte": { "type": "integer", "minimum": 0 }, "window_minutes_lte": { "type": "integer", "minimum": 0 }, "drain_ratio_gte": { "type": "number", "minimum": 0, "maximum": 1 }, "account_age_days_lt": { "type": "integer", "minimum": 0 }, "inbound_fan_in_gte": { "type": "integer", "minimum": 0 } } } }
+  }
+}

@@ -1,0 +1,171 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Kinga Assessment Event v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "tenant_event_id",
+    "event_type",
+    "occurred_at",
+    "channel",
+    "subject"
+  ],
+  "properties": {
+    "tenant_event_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9._:-]+$"
+    },
+    "event_type": {
+      "type": "string",
+      "enum": [
+        "onboarding",
+        "login",
+        "device_change",
+        "sim_change",
+        "beneficiary_add",
+        "funds_transfer",
+        "loan_application",
+        "limit_change",
+        "agent_float_movement"
+      ]
+    },
+    "occurred_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "channel": {
+      "type": "string",
+      "enum": [
+        "mobile_app",
+        "ussd",
+        "agent",
+        "web",
+        "loan_app",
+        "api"
+      ]
+    },
+    "subject": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "msisdn": {
+          "type": "string",
+          "pattern": "^\\+[1-9][0-9]{7,14}$"
+        },
+        "account_ref": {
+          "type": "string"
+        },
+        "customer_ref": {
+          "type": "string"
+        }
+      },
+      "anyOf": [
+        {
+          "required": [
+            "msisdn"
+          ]
+        },
+        {
+          "required": [
+            "account_ref"
+          ]
+        }
+      ]
+    },
+    "device": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "device_id": {
+          "type": "string"
+        },
+        "ip": {
+          "type": "string"
+        },
+        "app_version": {
+          "type": "string"
+        }
+      }
+    },
+    "transaction": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "amount": {
+          "type": "number",
+          "minimum": 0
+        },
+        "currency": {
+          "type": "string",
+          "pattern": "^[A-Z]{3}$"
+        },
+        "rail": {
+          "type": "string"
+        },
+        "beneficiary": {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string"
+            },
+            "ref": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "signals": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "sim_swap_age_minutes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "telco_available": {
+          "type": "boolean"
+        },
+        "device_first_seen": {
+          "type": "boolean"
+        },
+        "beneficiary_first_seen": {
+          "type": "boolean"
+        },
+        "balance_drain_ratio": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "transfers_in_window": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "new_beneficiaries_in_window": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "window_minutes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "account_age_days": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "inbound_fan_in": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "rapid_outbound": {
+          "type": "boolean"
+        },
+        "telco_source": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}

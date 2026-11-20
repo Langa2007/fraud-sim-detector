@@ -1,0 +1,10 @@
+/data/
+/synthetic.jsonl
+/kinga
+/cmd
+/engine/target/
+__pycache__/
+*.py[cod]
+Structure.md
+Phases.md
+

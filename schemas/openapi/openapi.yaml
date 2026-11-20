@@ -1,0 +1,49 @@
+openapi: 3.1.0
+info:
+  title: Kinga Shadow Assessment API
+  version: 1.0.0
+  description: Phase 1 read-only shadow scoring. Decisions are recommendations and never block transactions.
+servers:
+  - url: http://localhost:8080
+paths:
+  /healthz:
+    get:
+      security: []
+      responses:
+        '200': { description: Process is live }
+  /readyz:
+    get:
+      security: []
+      responses:
+        '200': { description: Ready to accept assessments }
+  /v1/assess:
+    post:
+      summary: Score one event in shadow mode
+      security: [{ HMAC: [] }]
+      parameters:
+        - { in: header, name: Idempotency-Key, required: true, schema: { type: string } }
+        - { in: header, name: X-Kinga-Key, required: true, schema: { type: string } }
+        - { in: header, name: X-Kinga-Timestamp, required: true, schema: { type: integer, format: int64 } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '../events/assessment.schema.json' }
+      responses:
+        '200': { description: Decision, reasons and evidence reference }
+        '401': { description: Missing or invalid credentials/signature }
+        '409': { description: Idempotency key reused with a different payload }
+        '422': { description: Invalid canonical event }
+  /v1/evidence/verify:
+    get:
+      security: []
+      summary: Verify the local evidence hash chain
+      responses:
+        '200': { description: Evidence file verified }
+        '500': { description: Chain integrity failure }
+components:
+  securitySchemes:
+    HMAC:
+      type: apiKey
+      in: header
+      name: X-Kinga-Signature

@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Kinga internal Rust assessment response v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["decision", "mode", "risk_score", "risk_band", "reasons", "recommended_actions", "degraded", "tenant_event_id", "policy_version", "model_version", "latency_ms", "evidence_id"],
+  "properties": {
+    "decision": { "enum": ["ALLOW", "STEP_UP", "HOLD"] },
+    "mode": { "const": "shadow" },
+    "risk_score": { "type": "number", "minimum": 0, "maximum": 1 },
+    "risk_band": { "enum": ["low", "medium", "high", "critical"] },
+    "reasons": { "type": "array", "items": { "type": "object", "required": ["code", "detail", "weight"], "properties": { "code": { "type": "string" }, "detail": { "type": "string" }, "weight": { "type": "number" } } } },
+    "recommended_actions": { "type": "array", "items": { "type": "string" } },
+    "degraded": { "type": "boolean" },
+    "tenant_event_id": { "type": "string" },
+    "policy_version": { "type": "string" },
+    "model_version": { "type": ["string", "null"] },
+    "latency_ms": { "type": "integer", "minimum": 0 },
+    "evidence_id": { "type": "string" }
+  }
+}

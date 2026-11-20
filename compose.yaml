@@ -1,0 +1,27 @@
+services:
+  decision-engine:
+    build:
+      context: .
+      dockerfile: engine/Dockerfile
+    expose: ["8090"]
+    restart: unless-stopped
+  kinga:
+    build:
+      context: .
+      dockerfile: deploy/compose/Dockerfile
+    environment:
+      KINGA_LISTEN_ADDR: :8080
+      KINGA_ENGINE_URL: http://decision-engine:8090
+      KINGA_TELCO_SIMULATOR_PATH: /app/testdata/telco/simulator.json
+      KINGA_API_KEYS: ${KINGA_API_KEYS:-demo:demo-key:demo-secret}
+      KINGA_EVIDENCE_PATH: /data/evidence.jsonl
+    ports: ["8080:8080"]
+    volumes: ["kinga-evidence:/data"]
+    read_only: true
+    tmpfs: [/tmp]
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    restart: unless-stopped
+    depends_on: [decision-engine]
+volumes:
+  kinga-evidence:

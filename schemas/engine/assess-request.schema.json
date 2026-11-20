@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Kinga internal Rust assessment request v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["tenant", "event"],
+  "properties": {
+    "tenant": { "type": "string", "minLength": 1 },
+    "event": { "$ref": "../events/assessment.schema.json" }
+  }
+}
