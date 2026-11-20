@@ -13,15 +13,15 @@ import (
 )
 
 type Event struct {
-	TenantEventID string       `json:"tenant_event_id"`
-	EventType     string       `json:"event_type"`
-	OccurredAt    string       `json:"occurred_at"`
-	Channel       string       `json:"channel"`
-	Subject       Subject      `json:"subject"`
-	Device        *Device      `json:"device,omitempty"`
-	Transaction   *Transaction `json:"transaction,omitempty"`
-	Signals       *Signals     `json:"signals,omitempty"`
-	ConfirmedFraud *bool       `json:"confirmed_fraud,omitempty"`
+	TenantEventID  string       `json:"tenant_event_id"`
+	EventType      string       `json:"event_type"`
+	OccurredAt     string       `json:"occurred_at"`
+	Channel        string       `json:"channel"`
+	Subject        Subject      `json:"subject"`
+	Device         *Device      `json:"device,omitempty"`
+	Transaction    *Transaction `json:"transaction,omitempty"`
+	Signals        *Signals     `json:"signals,omitempty"`
+	ConfirmedFraud *bool        `json:"confirmed_fraud,omitempty"`
 }
 
 type Subject struct {
