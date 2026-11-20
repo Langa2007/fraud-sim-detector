@@ -1,0 +1,72 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build and lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.mod
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Check Go formatting
+        run: test -z "$(gofmt -l $(git ls-files '*.go'))"
+
+      - name: Vet and build Go services
+        run: |
+          go vet ./...
+          go build ./...
+
+      - name: Check Rust formatting
+        run: cargo fmt --manifest-path engine/Cargo.toml -- --check
+
+      - name: Lint and build Rust decision engine
+        run: |
+          cargo clippy --locked --manifest-path engine/Cargo.toml -- -D warnings
+          cargo build --locked --release --manifest-path engine/Cargo.toml
+
+      - name: Compile Python tools
+        run: python -m compileall -q tools
+
+      - name: Validate JSON contracts and policies
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          for root in (Path("schemas"), Path("policies"), Path("testdata")):
+              for path in root.rglob("*.json"):
+                  with path.open(encoding="utf-8") as source:
+                      json.load(source)
+          PY
+
+      - name: Validate Docker Compose configuration
+        run: docker compose config --quiet

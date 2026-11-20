@@ -186,17 +186,18 @@ fn evaluate(policy: &Policy, request: Request) -> Response {
         .and_then(|v| v.get(0..2))
         .and_then(|v| v.parse::<u32>().ok())
         .unwrap_or(12);
-    if !reasons.is_empty() && (hour >= 22 || hour < 5) {
-        if let Some(rule) = policy.rules.iter().find(|r| r.id == "overnight_activity") {
-            if decision_rank(&rule.action) > decision_rank(minimum_decision) {
-                minimum_decision = &rule.action;
-            }
-            reasons.push(Reason {
-                code: rule.reason.clone(),
-                detail: format!("{} Channel: {}.", rule.description, ev.channel),
-                weight: rule.weight,
-            });
+    if !reasons.is_empty()
+        && !(5..22).contains(&hour)
+        && let Some(rule) = policy.rules.iter().find(|r| r.id == "overnight_activity")
+    {
+        if decision_rank(&rule.action) > decision_rank(minimum_decision) {
+            minimum_decision = &rule.action;
         }
+        reasons.push(Reason {
+            code: rule.reason.clone(),
+            detail: format!("{} Channel: {}.", rule.description, ev.channel),
+            weight: rule.weight,
+        });
     }
     reasons.sort_by(|a, b| {
         b.weight
@@ -270,10 +271,10 @@ fn read_request(stream: &mut TcpStream) -> std::io::Result<(String, Vec<u8>)> {
     let first = text.lines().next().unwrap_or("").to_string();
     let mut length = 0usize;
     for line in text.lines().skip(1) {
-        if let Some((k, v)) = line.split_once(':') {
-            if k.eq_ignore_ascii_case("content-length") {
-                length = v.trim().parse().unwrap_or(0)
-            }
+        if let Some((k, v)) = line.split_once(':')
+            && k.eq_ignore_ascii_case("content-length")
+        {
+            length = v.trim().parse().unwrap_or(0)
         }
     }
     if length > 1_048_576 {
