@@ -537,8 +537,14 @@ mod tests {
         assert!(res.risk_score >= 0.7);
         // Should match SIM swap, balance drain, and overnight activity
         assert_eq!(res.reasons.len(), 3);
-        assert!(res.recommended_actions.contains(&"ALERT_FRAUD_TEAM".to_string()));
-        assert!(res.recommended_actions.contains(&"RECOMMEND_HOLD".to_string()));
+        assert!(
+            res.recommended_actions
+                .contains(&"ALERT_FRAUD_TEAM".to_string())
+        );
+        assert!(
+            res.recommended_actions
+                .contains(&"RECOMMEND_HOLD".to_string())
+        );
     }
 
     #[test]
