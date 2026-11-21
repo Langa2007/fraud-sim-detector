@@ -94,7 +94,7 @@ func TestAPIEndToEnd(t *testing.T) {
 	}
 
 	client := engine.NewClient(engineSrv.URL, 500*time.Millisecond)
-	h := New(store.New("1h"), client, evLog, caseLog, outcomeLog, keys, cfg, features.NewRuntime(), sim)
+	h := New(store.New("1h"), client, evLog, caseLog, outcomeLog, nil, nil, keys, cfg, features.NewRuntime(), sim)
 
 	// 3. Test Health & Readyz
 	rec := httptest.NewRecorder()

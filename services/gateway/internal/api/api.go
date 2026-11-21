@@ -10,6 +10,7 @@ import (
 	"math"
 	"mime"
 	"net/http"
+	"net/url"
 	"os"
 	"regexp"
 	"sort"
@@ -21,9 +22,11 @@ import (
 	"kinga/services/gateway/internal/auth"
 	"kinga/services/gateway/internal/cases"
 	"kinga/services/gateway/internal/config"
+	"kinga/services/gateway/internal/consortium"
 	"kinga/services/gateway/internal/engine"
 	"kinga/services/gateway/internal/evidence"
 	"kinga/services/gateway/internal/features"
+	"kinga/services/gateway/internal/graph"
 	"kinga/services/gateway/internal/migration"
 	"kinga/services/gateway/internal/outcomes"
 	"kinga/services/gateway/internal/stepup"
@@ -37,6 +40,8 @@ type API struct {
 	evidence         *evidence.Log
 	cases            *cases.Store
 	outcomes         *outcomes.Store
+	consortium       *consortium.Store
+	graph            *graph.Runtime
 	stepup           *stepup.Orchestrator
 	migration        *migration.Manager
 	features         *features.Runtime
@@ -63,13 +68,15 @@ type keyLock struct {
 	refs int
 }
 
-func New(s *store.Store, e *engine.Client, l *evidence.Log, cs *cases.Store, o *outcomes.Store, k map[string]auth.Credential, c config.Config, f *features.Runtime, t telco.Connector) *API {
+func New(s *store.Store, e *engine.Client, l *evidence.Log, cs *cases.Store, o *outcomes.Store, co *consortium.Store, gr *graph.Runtime, k map[string]auth.Credential, c config.Config, f *features.Runtime, t telco.Connector) *API {
 	a := &API{
 		idem:             s,
 		engine:           e,
 		evidence:         l,
 		cases:            cs,
 		outcomes:         o,
+		consortium:       co,
+		graph:            gr,
 		stepup:           stepup.NewOrchestrator(),
 		migration:        migration.NewManager(),
 		features:         f,
@@ -87,6 +94,13 @@ func New(s *store.Store, e *engine.Client, l *evidence.Log, cs *cases.Store, o *
 	a.mux.HandleFunc("POST /v1/assess", a.assess)
 	a.mux.HandleFunc("GET /v1/evidence/verify", a.verify)
 	a.mux.HandleFunc("POST /v1/outcomes", a.submitOutcome)
+	a.mux.HandleFunc("POST /v1/consortium/indicators", a.contributeIndicator)
+	a.mux.HandleFunc("POST /v1/tokenize", a.tokenizeIdentifier)
+	a.mux.HandleFunc("GET /v1/consortium/indicators/{namespace}/{token}", a.queryIndicator)
+	a.mux.HandleFunc("POST /v1/consortium/indicators/{namespace}/{token}/disputes", a.disputeIndicator)
+	a.mux.HandleFunc("POST /v1/consortium/indicators/{namespace}/{token}/resolution", a.resolveIndicator)
+	a.mux.HandleFunc("GET /v1/consortium/members/me", a.consortiumMember)
+	a.mux.HandleFunc("GET /v1/graph/{namespace}/{token}", a.lookupGraph)
 	a.mux.HandleFunc("GET /v1/cases", a.listCases)
 	a.mux.HandleFunc("POST /v1/cases/{caseID}/actions", a.applyCaseAction)
 	a.mux.HandleFunc("GET /v1/cases/{caseID}/evidence", a.exportCaseEvidence)
@@ -140,6 +154,26 @@ func (a *API) ready(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	if err := a.engine.Ready(ctx); err != nil {
 		write(w, 503, map[string]string{"status": "not_ready", "dependency": "decision_engine"})
+		return
+	}
+	endpoint, err := url.JoinPath(a.cfg.TokenizerURL, "healthz")
+	if err != nil {
+		write(w, 503, map[string]string{"status": "not_ready", "dependency": "tokenizer"})
+		return
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		write(w, 503, map[string]string{"status": "not_ready", "dependency": "tokenizer"})
+		return
+	}
+	response, err := (&http.Client{Timeout: 100 * time.Millisecond}).Do(request)
+	if err != nil {
+		write(w, 503, map[string]string{"status": "not_ready", "dependency": "tokenizer"})
+		return
+	}
+	_ = response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		write(w, 503, map[string]string{"status": "not_ready", "dependency": "tokenizer"})
 		return
 	}
 	write(w, 200, map[string]string{"status": "ready", "mode": "shadow"})

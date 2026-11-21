@@ -295,6 +295,16 @@ Large tier-1 banks come later, via the consortium (their confirmed indicators ar
 
 ## 15. Sources
 
+## Phase 3 implementation status
+
+The repository now contains a Rust network/tenant-scoped HMAC tokenizer, signed Go APIs for consortium contributions and thresholded lookups, a hash-chained indicator ledger with TTL confidence decay and dispute/removal actions, a token-only Python graph batch builder, and Go serving for graph snapshots. See the [Phase 3 governance pack](./docs/governance/phase-three-consortium.md) and [graph pipeline guide](./docs/graph/phase-three-graph.md).
+
+This is a technical pilot foundation. Do not treat it as a live consortium: signed member agreements, legal sign-off, production key management, automatic graph refresh, PSI/DP, five active members, and measured cross-institution lift remain outstanding. Compose requires `KINGA_TOKEN_KEYRING`, `KINGA_TOKENIZER_CALLER_KEY`, and `KINGA_CONSORTIUM_ADMIN_TOKEN`; use unique randomly generated secrets outside local development.
+
+Member endpoints use the existing HMAC request headers. `POST /v1/tokenize` accepts `namespace`, `value`, and optional `scope` (`network` or `tenant`); it returns only the token and key version. `POST /v1/consortium/indicators` accepts namespace, token, confidence, and optional TTL hours. `GET /v1/consortium/indicators/{namespace}/{token}` returns a match only after the configured independent-member threshold. Members can dispute their contributions; governance resolves through the separately configured admin token. `GET /v1/graph/{namespace}/{token}` serves a batch feature only when its independent-tenant count meets the same threshold.
+
+## 16. Sources
+
 - Business Daily, bank fraud losses (CBK data): https://www.businessdailyafrica.com/bd/corporate/companies/hackers-steal-sh1-59-billion-from-kenya-bank-customers-5186982
 - Khusoko, CBK fraud breakdown: https://khusoko.com/2025/09/15/kenyas-banking-sector-faces-cybersecurity-reckoning-as-fraud-losses-quadruple/
 - TechCabal, insiders vs hackers: https://techcabal.com/2025/09/17/kenya-central-bank-blames-hackers-mobile-banking-fraud/

@@ -3,6 +3,7 @@
 /kinga
 /cmd
 /engine/target/
+/services/tokenizer/target/
 /models/*
 !/models/README.md
 __pycache__/

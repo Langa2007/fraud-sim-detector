@@ -7,6 +7,7 @@ FROM gcr.io/distroless/static-debian12:nonroot
 WORKDIR /app
 COPY --from=build /out/kinga /kinga
 COPY testdata/telco/simulator.json /app/testdata/telco/simulator.json
+RUN mkdir -p /data && chown nonroot:nonroot /data
 USER nonroot:nonroot
 EXPOSE 8080
 ENTRYPOINT ["/kinga"]

@@ -1,4 +1,18 @@
 services:
+  tokenizer:
+    build:
+      context: .
+      dockerfile: services/tokenizer/Dockerfile
+    expose: ["8091"]
+    environment:
+      KINGA_TOKENIZER_ADDR: 0.0.0.0:8091
+      KINGA_TOKEN_KEYRING: ${KINGA_TOKEN_KEYRING:?set a JSON versioned network keyring}
+      KINGA_TOKENIZER_CALLER_KEY: ${KINGA_TOKENIZER_CALLER_KEY:?set a private gateway caller key}
+    read_only: true
+    tmpfs: [/tmp]
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    restart: unless-stopped
   decision-engine:
     build:
       context: .
@@ -17,11 +31,17 @@ services:
     environment:
       KINGA_LISTEN_ADDR: :8080
       KINGA_ENGINE_URL: http://decision-engine:8090
+      KINGA_TOKENIZER_URL: http://tokenizer:8091
+      KINGA_TOKENIZER_CALLER_KEY: ${KINGA_TOKENIZER_CALLER_KEY:?set a private gateway caller key}
       KINGA_TELCO_SIMULATOR_PATH: /app/testdata/telco/simulator.json
       KINGA_API_KEYS: ${KINGA_API_KEYS:-demo:demo-key:demo-secret}
       KINGA_EVIDENCE_PATH: /data/evidence.jsonl
       KINGA_OUTCOME_PATH: /data/outcomes.jsonl
       KINGA_CASE_PATH: /data/cases.jsonl
+      KINGA_CONSORTIUM_PATH: /data/consortium.jsonl
+      KINGA_GRAPH_FEATURES_PATH: /data/graph-features.jsonl
+      KINGA_CONSORTIUM_ADMIN_TOKEN: ${KINGA_CONSORTIUM_ADMIN_TOKEN:?set a private governance token}
+      KINGA_CONSORTIUM_MIN_CONFIRMATIONS: ${KINGA_CONSORTIUM_MIN_CONFIRMATIONS:-2}
     ports: ["8080:8080"]
     volumes: ["kinga-evidence:/data"]
     read_only: true
@@ -29,6 +49,6 @@ services:
     security_opt: [no-new-privileges:true]
     cap_drop: [ALL]
     restart: unless-stopped
-    depends_on: [decision-engine]
+    depends_on: [decision-engine, tokenizer]
 volumes:
   kinga-evidence:

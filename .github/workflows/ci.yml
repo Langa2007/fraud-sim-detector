@@ -52,12 +52,19 @@ jobs:
           go build ./...
 
       - name: Check Rust formatting
-        run: cargo fmt --manifest-path engine/Cargo.toml -- --check
+        run: |
+          cargo fmt --manifest-path engine/Cargo.toml -- --check
+          cargo fmt --manifest-path services/tokenizer/Cargo.toml -- --check
 
       - name: Lint and build Rust decision engine
         run: |
           cargo clippy --locked --manifest-path engine/Cargo.toml -- -D warnings
           cargo build --locked --release --manifest-path engine/Cargo.toml
+
+      - name: Lint and build Rust tokenizer
+        run: |
+          cargo clippy --locked --manifest-path services/tokenizer/Cargo.toml -- -D warnings
+          cargo build --locked --release --manifest-path services/tokenizer/Cargo.toml
 
       - name: Compile Python tools
         run: python -m compileall -q tools
@@ -81,4 +88,6 @@ jobs:
           PY
 
       - name: Validate Docker Compose configuration
-        run: docker compose config --quiet
+        run: |
+          cp .env.example .env
+          docker compose config --quiet
