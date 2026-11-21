@@ -320,9 +320,9 @@ func TestAPIConsortiumAndGraph(t *testing.T) {
 		"key-bank-b": {Tenant: "bank_b", Secret: []byte("secret-b")},
 	}
 	cfg := config.Config{
-		EvidencePath:              filepath.Join(dir, "evidence.jsonl"),
-		IdempotencyTTL:            "1h",
-		EngineURL:                 engineSrv.URL,
+		EvidencePath:               filepath.Join(dir, "evidence.jsonl"),
+		IdempotencyTTL:             "1h",
+		EngineURL:                  engineSrv.URL,
 		ConsortiumMinConfirmations: 2,
 	}
 
