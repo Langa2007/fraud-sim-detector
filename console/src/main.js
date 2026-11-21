@@ -615,6 +615,238 @@ window.toggleKillSwitch = function () {
   renderRollout(document.getElementById("app"));
 };
 
+window.simulateConsortiumQuery = function (mode) {
+  const resultBox = document.getElementById("consortium-query-result");
+  if (!resultBox) return;
+
+  if (mode === "below_floor") {
+    resultBox.innerHTML = `
+      <div style="background:rgba(239, 68, 68, 0.1); border:1px solid var(--danger); padding:1rem; border-radius:6px; color:#fca5a5;">
+        <strong>HTTP 404: indicator_not_found_or_below_privacy_threshold</strong><br>
+        <span style="font-size:0.85rem; color:var(--text-primary); display:block; margin-top:0.4rem;">
+          🔒 <strong>Privacy Floor Protection Active:</strong> Token only has 1 contribution from an individual tenant.
+          Under Kenya ODPC & Kinga Consortium rules, at least <strong>2 independent licensed institutions</strong> must corroborate an indicator before it can be disclosed across the network.
+        </span>
+      </div>
+    `;
+  } else {
+    resultBox.innerHTML = `
+      <div style="background:rgba(16, 185, 129, 0.1); border:1px solid var(--success); padding:1rem; border-radius:6px; color:#6ee7b7;">
+        <strong>HTTP 200 OK — Active Multi-Tenant Indicator Found</strong><br>
+        <pre style="background:var(--bg-primary); padding:0.75rem; border-radius:4px; margin-top:0.5rem; font-size:0.8rem; color:var(--text-primary);">{
+  "namespace": "beneficiary",
+  "token": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+  "confidence": 0.865,
+  "independent_confirmations": 3,
+  "expires_at": "2026-12-21T09:30:00Z"
+}</pre>
+        <span style="font-size:0.85rem; color:var(--text-primary); display:block; margin-top:0.4rem;">
+          🚨 <strong>Consortium Corroboration:</strong> Confirmed by 3 independent institutions (e.g. Bank A, Telco B, SACCO C) with 30-day exponential decay applied.
+        </span>
+      </div>
+    `;
+  }
+};
+
+window.simulateContributeIndicator = function () {
+  const ns = document.getElementById("contrib-namespace").value;
+  const rawId = document.getElementById("contrib-raw-id").value;
+  const conf = parseFloat(document.getElementById("contrib-confidence").value) || 0.8;
+  const statusEl = document.getElementById("contrib-status");
+
+  if (!rawId) {
+    alert("Please enter a raw identifier (e.g. MSISDN or account) to tokenize.");
+    return;
+  }
+
+  // Simulated HMAC-SHA256 network token preview (first 16 chars)
+  const simulatedToken = Array.from(rawId)
+    .reduce((acc, char) => (acc * 31 + char.charCodeAt(0)) >>> 0, 0x12345678)
+    .toString(16)
+    .padStart(8, "0") + "f8a912b3c4d5e6f7a0b1c2d3e4f5a6b7";
+
+  statusEl.innerHTML = `
+    <div style="background:rgba(56, 189, 248, 0.1); border:1px solid var(--accent); padding:0.75rem; border-radius:6px; font-size:0.85rem;">
+      ✅ Contributed to consortium ledger!<br>
+      <strong>Token:</strong> <code>${simulatedToken.padEnd(64, "0")}</code><br>
+      <strong>Action:</strong> contribute (Seq #143, SHA-256 Chained, Zero PII logged)<br>
+      <strong>Namespace:</strong> ${ns} | <strong>Confidence:</strong> ${conf}
+    </div>
+  `;
+};
+
+function renderConsortium(container) {
+  container.innerHTML = `
+    <div class="card">
+      <h2>Fraud Consortium & Multi-Tenant Entity Graph</h2>
+      <p style="color:var(--text-muted); font-size:0.85rem; margin-bottom:1.5rem;">
+        Phase 3 Network Intelligence: Cryptographic tokenization, tamper-evident hash chaining, privacy floor k-anonymity (>=2 independent confirmations), and cross-tenant mule graph feature extraction.
+      </p>
+
+      <div class="stat-grid">
+        <div class="stat-card">
+          <div class="label">Participating Members</div>
+          <div class="value" style="color:var(--accent);">8</div>
+          <div class="target">Tier 1 Banks & Telcos</div>
+        </div>
+        <div class="stat-card">
+          <div class="label">Privacy Floor (k)</div>
+          <div class="value">2+</div>
+          <div class="target">Independent Confirmations</div>
+        </div>
+        <div class="stat-card">
+          <div class="label">Confidence Half-Life</div>
+          <div class="value">30 Days</div>
+          <div class="target">Exponential Time Decay</div>
+        </div>
+        <div class="stat-card">
+          <div class="label">Local Contributions</div>
+          <div class="value" style="color:var(--success);">14</div>
+          <div class="target">demo tenant ledger share</div>
+        </div>
+      </div>
+
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:1.5rem; margin-bottom:1.5rem;">
+        <!-- Left: Interactive Consortium Sandbox -->
+        <div style="background:var(--bg-tertiary); padding:1.25rem; border-radius:8px;">
+          <h3 style="font-size:1rem; margin-bottom:0.75rem;">Consortium Indicator Privacy Simulator</h3>
+          <p style="color:var(--text-muted); font-size:0.8rem; margin-bottom:1rem;">
+            Test the k-anonymity privacy floor. Member identities are never disclosed, and single-institution reports are hidden until corroborated.
+          </p>
+          <div style="display:flex; gap:0.5rem; margin-bottom:1rem;">
+            <button class="btn" onclick="window.simulateConsortiumQuery('below_floor')">Query Unconfirmed (k=1)</button>
+            <button class="btn btn-primary" onclick="window.simulateConsortiumQuery('confirmed')">Query Confirmed (k=3)</button>
+          </div>
+          <div id="consortium-query-result">
+            <div style="background:var(--bg-primary); padding:1rem; border-radius:6px; font-size:0.85rem; color:var(--text-muted);">
+              Click a query button above to inspect real-time consortium response handling.
+            </div>
+          </div>
+        </div>
+
+        <!-- Right: Tokenize & Contribute -->
+        <div style="background:var(--bg-tertiary); padding:1.25rem; border-radius:8px;">
+          <h3 style="font-size:1rem; margin-bottom:0.75rem;">Tokenize & Contribute Indicator</h3>
+          <p style="color:var(--text-muted); font-size:0.8rem; margin-bottom:1rem;">
+            Tokens are keyed via HMAC-SHA256 Rust service. Raw PII is never transmitted to the consortium ledger.
+          </p>
+          <div style="display:grid; grid-template-columns:1fr 2fr; gap:0.5rem; margin-bottom:0.75rem;">
+            <select id="contrib-namespace" class="form-input" style="padding:0.4rem;">
+              <option value="msisdn">MSISDN</option>
+              <option value="account">Account</option>
+              <option value="beneficiary">Beneficiary</option>
+              <option value="wallet">Wallet</option>
+              <option value="agent">Agent</option>
+            </select>
+            <input id="contrib-raw-id" class="form-input" placeholder="+254712345678 or ACC-9988" style="padding:0.4rem;" value="+254712999888">
+          </div>
+          <div style="display:flex; gap:0.5rem; align-items:center; margin-bottom:1rem;">
+            <label style="font-size:0.8rem; color:var(--text-muted);">Confidence:</label>
+            <input id="contrib-confidence" type="number" step="0.05" min="0" max="1" value="0.90" style="width:70px; padding:0.3rem;" class="form-input">
+            <button class="btn btn-primary" onclick="window.simulateContributeIndicator()">Contribute Indicator</button>
+          </div>
+          <div id="contrib-status"></div>
+        </div>
+      </div>
+
+      <!-- Entity Graph Section -->
+      <div style="background:var(--bg-secondary); border:1px solid var(--border); border-radius:8px; padding:1.25rem; margin-bottom:1.5rem;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem;">
+          <div>
+            <h3 style="font-size:1rem;">Multi-Tenant Graph Community Clusters</h3>
+            <p style="color:var(--text-muted); font-size:0.8rem;">Synthesized network batch features computed across tenant transaction snapshots (v1 format).</p>
+          </div>
+          <span class="badge badge-critical">Snapshot: 2026-11-20 (Fresh)</span>
+        </div>
+
+        <table class="table">
+          <thead>
+            <tr>
+              <th>Community Hub Token</th>
+              <th>Namespace</th>
+              <th>Network Degree</th>
+              <th>Cross-Tenant Links</th>
+              <th>Mule Likelihood</th>
+              <th>Risk Classification</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>9f8a...2e10</code></td>
+              <td>wallet</td>
+              <td>28 transfers</td>
+              <td>4 independent banks</td>
+              <td><strong style="color:var(--danger);">0.89</strong></td>
+              <td><span class="badge badge-critical">HIGH MULE RISK</span></td>
+            </tr>
+            <tr>
+              <td><code>3b1c...aa74</code></td>
+              <td>account</td>
+              <td>19 transfers</td>
+              <td>3 independent banks</td>
+              <td><strong style="color:var(--danger);">0.76</strong></td>
+              <td><span class="badge badge-critical">HIGH MULE RISK</span></td>
+            </tr>
+            <tr>
+              <td><code>7e4d...089f</code></td>
+              <td>agent</td>
+              <td>14 transfers</td>
+              <td>2 independent telcos</td>
+              <td><strong style="color:var(--warning);">0.48</strong></td>
+              <td><span class="badge badge-stepup">ELEVATED COLLUSION</span></td>
+            </tr>
+            <tr>
+              <td><code>1a2b...55cd</code></td>
+              <td>beneficiary</td>
+              <td>4 transfers</td>
+              <td>2 independent banks</td>
+              <td><strong style="color:var(--success);">0.12</strong></td>
+              <td><span class="badge badge-allow">CLEAN BENEFICIARY</span></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Agent Float Movement Anomalies -->
+      <div style="background:var(--bg-secondary); border:1px solid var(--border); border-radius:8px; padding:1.25rem;">
+        <h3 style="font-size:1rem; margin-bottom:0.5rem;">Agent Float & Structuring Anomaly Alerts</h3>
+        <p style="color:var(--text-muted); font-size:0.8rem; margin-bottom:1rem;">
+          Real-time detection of float depletion > 80% in < 30 minutes, structured smurfing (90k-99k KES), and collusive burst cash-out.
+        </p>
+
+        <div style="display:grid; grid-template-columns:repeat(3, 1fr); gap:1rem;">
+          <div style="background:var(--bg-tertiary); padding:1rem; border-radius:6px; border-left:4px solid var(--danger);">
+            <div style="display:flex; justify-content:space-between; margin-bottom:0.4rem;">
+              <strong>AGENT-NAI-0442</strong>
+              <span class="badge badge-critical">HOLD (0.85)</span>
+            </div>
+            <p style="font-size:0.8rem; color:var(--text-muted); margin-bottom:0.4rem;">Float drained 88% within 18 minutes via repeated outbound transfers.</p>
+            <div style="font-size:0.75rem; color:var(--accent);">Rule: agent_float_movement_anomaly</div>
+          </div>
+
+          <div style="background:var(--bg-tertiary); padding:1rem; border-radius:6px; border-left:4px solid var(--danger);">
+            <div style="display:flex; justify-content:space-between; margin-bottom:0.4rem;">
+              <strong>ACC-MULE-8812</strong>
+              <span class="badge badge-critical">HOLD (0.78)</span>
+            </div>
+            <p style="font-size:0.8rem; color:var(--text-muted); margin-bottom:0.4rem;">2x transfers of KSh 98,500 within 22 min just below 100k reporting threshold.</p>
+            <div style="font-size:0.75rem; color:var(--accent);">Rule: STRUCTURING_DETECTED</div>
+          </div>
+
+          <div style="background:var(--bg-tertiary); padding:1rem; border-radius:6px; border-left:4px solid var(--warning);">
+            <div style="display:flex; justify-content:space-between; margin-bottom:0.4rem;">
+              <strong>AGENT-MSA-1090</strong>
+              <span class="badge badge-stepup">HOLD (0.82)</span>
+            </div>
+            <p style="font-size:0.8rem; color:var(--text-muted); margin-bottom:0.4rem;">Burst cash-out: 7 rapid outbound withdrawals processed in 8 minutes.</p>
+            <div style="font-size:0.75rem; color:var(--accent);">Rule: AGENT_BURST_CASH_OUT</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
 window.closeModal = function () {
   document.getElementById("modal-container").innerHTML = "";
 };
@@ -648,6 +880,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     if (target === "cases") renderCases(app);
     else if (target === "explorer") renderExplorer(app);
+    else if (target === "consortium") renderConsortium(app);
     else if (target === "stepup") renderStepUp(app);
     else if (target === "rollout") renderRollout(app);
     else if (target === "rules") renderRules(app);

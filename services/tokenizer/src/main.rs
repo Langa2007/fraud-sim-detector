@@ -25,7 +25,7 @@ struct Request {
     value: String,
     key_version: Option<String>,
 }
-#[derive(Serialize)]
+#[derive(Debug, Serialize, PartialEq, Eq)]
 struct Token {
     token: String,
     key_version: String,
@@ -214,5 +214,139 @@ fn main() {
         let k = Arc::clone(&keyring);
         let c = Arc::clone(&caller);
         thread::spawn(move || handle(stream, k, c));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    fn test_keyring() -> Keyring {
+        let mut keys = HashMap::new();
+        // 32-byte hex keys
+        keys.insert(
+            "k1".into(),
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".into(),
+        );
+        keys.insert(
+            "k2".into(),
+            "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210".into(),
+        );
+        Keyring {
+            active: "k1".into(),
+            keys,
+        }
+    }
+
+    #[test]
+    fn test_tokenize_network_and_tenant_scope() {
+        let kr = test_keyring();
+
+        // Network scope
+        let req_net = Request {
+            scope: "network".into(),
+            tenant: None,
+            namespace: "msisdn".into(),
+            value: "+254712345678".into(),
+            key_version: None,
+        };
+        let tok_net = tokenize(&kr, req_net).expect("network tokenization failed");
+        assert_eq!(tok_net.key_version, "k1");
+        assert_eq!(tok_net.token.len(), 64);
+
+        // Tenant scope (tenant A)
+        let req_tenant_a = Request {
+            scope: "tenant".into(),
+            tenant: Some("tenantA".into()),
+            namespace: "msisdn".into(),
+            value: "+254712345678".into(),
+            key_version: None,
+        };
+        let tok_tenant_a = tokenize(&kr, req_tenant_a).expect("tenantA tokenization failed");
+        assert_eq!(tok_tenant_a.key_version, "k1");
+
+        // Tenant scope (tenant B)
+        let req_tenant_b = Request {
+            scope: "tenant".into(),
+            tenant: Some("tenantB".into()),
+            namespace: "msisdn".into(),
+            value: "+254712345678".into(),
+            key_version: None,
+        };
+        let tok_tenant_b = tokenize(&kr, req_tenant_b).expect("tenantB tokenization failed");
+
+        // Domain separation guarantees all three tokens are distinct
+        assert_ne!(tok_net.token, tok_tenant_a.token);
+        assert_ne!(tok_tenant_a.token, tok_tenant_b.token);
+    }
+
+    #[test]
+    fn test_tokenize_key_rotation() {
+        let kr = test_keyring();
+
+        let req_k1 = Request {
+            scope: "network".into(),
+            tenant: None,
+            namespace: "account".into(),
+            value: "acc_100".into(),
+            key_version: Some("k1".into()),
+        };
+        let tok_k1 = tokenize(&kr, req_k1).unwrap();
+
+        let req_k2 = Request {
+            scope: "network".into(),
+            tenant: None,
+            namespace: "account".into(),
+            value: "acc_100".into(),
+            key_version: Some("k2".into()),
+        };
+        let tok_k2 = tokenize(&kr, req_k2).unwrap();
+
+        assert_eq!(tok_k1.key_version, "k1");
+        assert_eq!(tok_k2.key_version, "k2");
+        assert_ne!(tok_k1.token, tok_k2.token);
+    }
+
+    #[test]
+    fn test_tokenize_validation() {
+        let kr = test_keyring();
+
+        // Invalid namespace
+        let req_bad_ns = Request {
+            scope: "network".into(),
+            tenant: None,
+            namespace: "ssn".into(),
+            value: "12345".into(),
+            key_version: None,
+        };
+        assert_eq!(tokenize(&kr, req_bad_ns).unwrap_err(), "invalid_namespace");
+
+        // Untrimmed value
+        let req_untrimmed = Request {
+            scope: "network".into(),
+            tenant: None,
+            namespace: "msisdn".into(),
+            value: " +254712345678 ".into(),
+            key_version: None,
+        };
+        assert_eq!(tokenize(&kr, req_untrimmed).unwrap_err(), "invalid_value");
+
+        // Tenant required for tenant scope
+        let req_no_tenant = Request {
+            scope: "tenant".into(),
+            tenant: None,
+            namespace: "device".into(),
+            value: "dvc_123".into(),
+            key_version: None,
+        };
+        assert_eq!(tokenize(&kr, req_no_tenant).unwrap_err(), "tenant_required");
+    }
+
+    #[test]
+    fn test_constant_time_equal() {
+        assert!(constant_time_equal(b"secret123", b"secret123"));
+        assert!(!constant_time_equal(b"secret123", b"secret124"));
+        assert!(!constant_time_equal(b"secret", b"secret123"));
     }
 }

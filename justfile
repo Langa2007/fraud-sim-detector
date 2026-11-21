@@ -3,10 +3,12 @@ build:
     go build -o /tmp/kinga-ingest ./services/ingest/cmd
     go build -o /tmp/evidence-verify ./tools/evidence-verify
     cargo build --manifest-path engine/Cargo.toml --release
+    cargo build --manifest-path services/tokenizer/Cargo.toml --release
 
 test:
     go test -v ./...
     cargo test --manifest-path engine/Cargo.toml
+    cargo test --manifest-path services/tokenizer/Cargo.toml
 
 lint:
     go vet ./...
@@ -16,6 +18,12 @@ up:
 
 engine:
     KINGA_POLICY_PATH=policies/default.json cargo run --manifest-path engine/Cargo.toml
+
+tokenizer:
+    cargo run --manifest-path services/tokenizer/Cargo.toml
+
+build-graph input="data/synthetic.jsonl" output="data/graph_features.jsonl":
+    python3 tools/graph/build_graph.py --input {{input}} --output {{output}}
 
 replay events:
     python3 tools/replay/replay.py {{events}}

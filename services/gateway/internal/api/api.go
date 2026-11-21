@@ -28,6 +28,7 @@ import (
 	"kinga/services/gateway/internal/features"
 	"kinga/services/gateway/internal/graph"
 	"kinga/services/gateway/internal/migration"
+	"kinga/services/gateway/internal/mule"
 	"kinga/services/gateway/internal/outcomes"
 	"kinga/services/gateway/internal/stepup"
 	"kinga/services/gateway/internal/store"
@@ -42,6 +43,7 @@ type API struct {
 	outcomes         *outcomes.Store
 	consortium       *consortium.Store
 	graph            *graph.Runtime
+	mule             *mule.Detector
 	stepup           *stepup.Orchestrator
 	migration        *migration.Manager
 	features         *features.Runtime
@@ -68,7 +70,7 @@ type keyLock struct {
 	refs int
 }
 
-func New(s *store.Store, e *engine.Client, l *evidence.Log, cs *cases.Store, o *outcomes.Store, co *consortium.Store, gr *graph.Runtime, k map[string]auth.Credential, c config.Config, f *features.Runtime, t telco.Connector) *API {
+func New(s *store.Store, e *engine.Client, l *evidence.Log, cs *cases.Store, o *outcomes.Store, co *consortium.Store, k map[string]auth.Credential, c config.Config, f *features.Runtime, t telco.Connector) *API {
 	a := &API{
 		idem:             s,
 		engine:           e,
@@ -76,7 +78,7 @@ func New(s *store.Store, e *engine.Client, l *evidence.Log, cs *cases.Store, o *
 		cases:            cs,
 		outcomes:         o,
 		consortium:       co,
-		graph:            gr,
+		mule:             mule.New(),
 		stepup:           stepup.NewOrchestrator(),
 		migration:        migration.NewManager(),
 		features:         f,
@@ -112,6 +114,13 @@ func New(s *store.Store, e *engine.Client, l *evidence.Log, cs *cases.Store, o *
 	a.mux.HandleFunc("POST /v1/rollout", a.setRollout)
 	return a
 }
+
+// SetGraphRuntime attaches the optional graph snapshot after API construction.
+func (a *API) SetGraphRuntime(runtime *graph.Runtime) { a.graph = runtime }
+
+// SetMuleDetector sets or overrides the agent float and mule risk detector.
+func (a *API) SetMuleDetector(detector *mule.Detector) { a.mule = detector }
+
 func (a *API) ServeHTTP(w http.ResponseWriter, r *http.Request) { a.mux.ServeHTTP(w, r) }
 func write(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
@@ -156,25 +165,27 @@ func (a *API) ready(w http.ResponseWriter, r *http.Request) {
 		write(w, 503, map[string]string{"status": "not_ready", "dependency": "decision_engine"})
 		return
 	}
-	endpoint, err := url.JoinPath(a.cfg.TokenizerURL, "healthz")
-	if err != nil {
-		write(w, 503, map[string]string{"status": "not_ready", "dependency": "tokenizer"})
-		return
-	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
-	if err != nil {
-		write(w, 503, map[string]string{"status": "not_ready", "dependency": "tokenizer"})
-		return
-	}
-	response, err := (&http.Client{Timeout: 100 * time.Millisecond}).Do(request)
-	if err != nil {
-		write(w, 503, map[string]string{"status": "not_ready", "dependency": "tokenizer"})
-		return
-	}
-	_ = response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		write(w, 503, map[string]string{"status": "not_ready", "dependency": "tokenizer"})
-		return
+	if a.cfg.TokenizerURL != "" {
+		endpoint, err := url.JoinPath(a.cfg.TokenizerURL, "healthz")
+		if err != nil {
+			write(w, 503, map[string]string{"status": "not_ready", "dependency": "tokenizer"})
+			return
+		}
+		request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+		if err != nil {
+			write(w, 503, map[string]string{"status": "not_ready", "dependency": "tokenizer"})
+			return
+		}
+		response, err := (&http.Client{Timeout: 100 * time.Millisecond}).Do(request)
+		if err != nil {
+			write(w, 503, map[string]string{"status": "not_ready", "dependency": "tokenizer"})
+			return
+		}
+		_ = response.Body.Close()
+		if response.StatusCode != http.StatusOK {
+			write(w, 503, map[string]string{"status": "not_ready", "dependency": "tokenizer"})
+			return
+		}
 	}
 	write(w, 200, map[string]string{"status": "ready", "mode": "shadow"})
 }
@@ -304,6 +315,52 @@ func (a *API) assess(w http.ResponseWriter, r *http.Request) {
 	if available {
 		ev.Signals.SIMSwapAgeMinutes = telcoSignal.SIMSwapAgeMinutes
 	}
+
+	// Consortium intelligence: check if beneficiary has confirmed indicators across members
+	if a.consortium != nil && ev.Transaction.Beneficiary.Ref != "" {
+		benRef := ev.Transaction.Beneficiary.Ref
+		now := time.Now().UTC()
+		if hit, found := a.consortium.Query("beneficiary", benRef, now); found {
+			ev.Signals.BeneficiaryConsortiumHit = true
+			ev.Signals.ConsortiumConfirmations = hit.IndependentConfirmations
+			ev.Signals.ConsortiumConfidence = &hit.Confidence
+		} else if hit, found := a.consortium.Query("account", benRef, now); found {
+			ev.Signals.BeneficiaryConsortiumHit = true
+			ev.Signals.ConsortiumConfirmations = hit.IndependentConfirmations
+			ev.Signals.ConsortiumConfidence = &hit.Confidence
+		}
+	}
+
+	// Graph intelligence: check if subject or beneficiary has graph features
+	if a.graph != nil {
+		minTenants := a.cfg.ConsortiumMinConfirmations
+		if minTenants < 2 {
+			minTenants = 2
+		}
+		if ev.Transaction.Beneficiary.Ref != "" {
+			if feat, ok := a.graph.Lookup("wallet", ev.Transaction.Beneficiary.Ref, minTenants); ok {
+				ev.Signals.GraphMuleLikelihood = &feat.MuleLikelihood
+			} else if feat, ok := a.graph.Lookup("account", ev.Transaction.Beneficiary.Ref, minTenants); ok {
+				ev.Signals.GraphMuleLikelihood = &feat.MuleLikelihood
+			}
+		}
+		if ev.Signals.GraphMuleLikelihood == nil && ev.Subject.AccountRef != "" {
+			if feat, ok := a.graph.Lookup("wallet", ev.Subject.AccountRef, minTenants); ok {
+				ev.Signals.GraphMuleLikelihood = &feat.MuleLikelihood
+			} else if feat, ok := a.graph.Lookup("account", ev.Subject.AccountRef, minTenants); ok {
+				ev.Signals.GraphMuleLikelihood = &feat.MuleLikelihood
+			}
+		}
+	}
+
+	// Mule & Float risk: evaluate agent float depletion and structuring
+	if a.mule != nil {
+		anomaly := a.mule.Evaluate(cred.Tenant, &ev)
+		if anomaly.IsAnomaly {
+			ev.Signals.AgentFloatAnomaly = true
+		}
+	}
+
 	a.features.Observe(cred.Tenant, &ev)
 	result, err := a.engine.Assess(ctx, ev, cred.Tenant)
 	if err != nil {

@@ -26,6 +26,9 @@ type Simulator struct {
 }
 
 func NewSimulator(path string) (*Simulator, error) {
+	if path == "" {
+		return &Simulator{swaps: map[string]int{}}, nil
+	}
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
@@ -47,6 +50,9 @@ func (s *Simulator) Lookup(ctx context.Context, msisdn string) (Signal, error) {
 	case <-ctx.Done():
 		return Signal{}, ctx.Err()
 	default:
+	}
+	if s == nil || s.swaps == nil {
+		return Signal{Available: false, Source: "simulator"}, nil
 	}
 	age, ok := s.swaps[msisdn]
 	if !ok {

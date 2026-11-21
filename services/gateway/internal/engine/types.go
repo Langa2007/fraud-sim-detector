@@ -39,6 +39,11 @@ type Event struct {
 		AccountAgeDays           *int     `json:"account_age_days,omitempty"`
 		InboundFanIn             int      `json:"inbound_fan_in,omitempty"`
 		RapidOutbound            bool     `json:"rapid_outbound,omitempty"`
+		BeneficiaryConsortiumHit bool     `json:"beneficiary_consortium_hit,omitempty"`
+		ConsortiumConfirmations  int      `json:"consortium_confirmations,omitempty"`
+		ConsortiumConfidence     *float64 `json:"consortium_confidence,omitempty"`
+		GraphMuleLikelihood      *float64 `json:"graph_mule_likelihood,omitempty"`
+		AgentFloatAnomaly        bool     `json:"agent_float_anomaly,omitempty"`
 	} `json:"signals,omitempty"`
 }
 

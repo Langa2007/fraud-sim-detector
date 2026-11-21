@@ -169,7 +169,7 @@ fn high_default() -> f64 {
 fn critical_default() -> f64 {
     0.65
 }
-#[derive(Clone, Deserialize)]
+#[derive(Clone, Deserialize, Default)]
 struct Rule {
     id: String,
     reason: String,
@@ -193,6 +193,8 @@ struct Rule {
     account_age_days_lt: i64,
     #[serde(default)]
     inbound_fan_in_gte: i64,
+    #[serde(default)]
+    mule_likelihood_gte: f64,
 }
 #[derive(Deserialize)]
 struct Request {
@@ -218,6 +220,7 @@ struct Transaction {
     amount: f64,
 }
 #[derive(Default, Deserialize)]
+#[allow(dead_code)]
 struct Signals {
     sim_swap_age_minutes: Option<i64>,
     telco_available: Option<bool>,
@@ -237,6 +240,14 @@ struct Signals {
     inbound_fan_in: i64,
     #[serde(default)]
     rapid_outbound: bool,
+    #[serde(default)]
+    beneficiary_consortium_hit: bool,
+    #[serde(default)]
+    consortium_confirmations: i64,
+    consortium_confidence: Option<f64>,
+    graph_mule_likelihood: Option<f64>,
+    #[serde(default)]
+    agent_float_anomaly: bool,
 }
 
 impl Event {
@@ -324,6 +335,19 @@ fn evaluate(policy: &Policy, request: Request, model: Option<&ModelRuntime>) -> 
                     && s.inbound_fan_in >= rule.inbound_fan_in_gte
                     && s.rapid_outbound
             }
+            "beneficiary_consortium_hit" => s.beneficiary_consortium_hit,
+            "mule_graph_anomaly" => s
+                .graph_mule_likelihood
+                .map(|val| {
+                    let threshold = if rule.mule_likelihood_gte > 0.0 {
+                        rule.mule_likelihood_gte
+                    } else {
+                        0.70
+                    };
+                    val >= threshold
+                })
+                .unwrap_or(false),
+            "agent_float_movement_anomaly" => s.agent_float_anomaly,
             _ => false,
         };
         if matched {
@@ -622,6 +646,7 @@ mod tests {
                     drain_ratio_gte: 0.0,
                     account_age_days_lt: 0,
                     inbound_fan_in_gte: 0,
+                    ..Default::default()
                 },
                 Rule {
                     id: "balance_drain".into(),
@@ -637,6 +662,7 @@ mod tests {
                     drain_ratio_gte: 0.7,
                     account_age_days_lt: 0,
                     inbound_fan_in_gte: 0,
+                    ..Default::default()
                 },
                 Rule {
                     id: "overnight_activity".into(),
@@ -652,6 +678,32 @@ mod tests {
                     drain_ratio_gte: 0.0,
                     account_age_days_lt: 0,
                     inbound_fan_in_gte: 0,
+                    ..Default::default()
+                },
+                Rule {
+                    id: "beneficiary_consortium_hit".into(),
+                    reason: "BENEFICIARY_CONSORTIUM_HIT".into(),
+                    description: "Beneficiary flagged by consortium members".into(),
+                    action: "HOLD".into(),
+                    weight: 0.45,
+                    ..Default::default()
+                },
+                Rule {
+                    id: "mule_graph_anomaly".into(),
+                    reason: "MULE_GRAPH_RISK".into(),
+                    description: "High mule likelihood in network graph".into(),
+                    action: "HOLD".into(),
+                    weight: 0.35,
+                    mule_likelihood_gte: 0.70,
+                    ..Default::default()
+                },
+                Rule {
+                    id: "agent_float_movement_anomaly".into(),
+                    reason: "AGENT_FLOAT_ANOMALY".into(),
+                    description: "Rapid float depletion or structured smurfing".into(),
+                    action: "HOLD".into(),
+                    weight: 0.30,
+                    ..Default::default()
                 },
             ],
         }
@@ -777,5 +829,84 @@ mod tests {
         let res = evaluate(&policy, req, None);
         assert!(res.degraded);
         assert_eq!(res.decision, "ALLOW");
+    }
+
+    #[test]
+    fn test_beneficiary_consortium_hit_triggers_hold() {
+        let policy = test_policy();
+        let req = Request {
+            _tenant: "demo".into(),
+            event: Event {
+                tenant_event_id: "evt_consortium_1".into(),
+                occurred_at: "2026-10-31T12:00:00+03:00".into(),
+                channel: "mobile_app".into(),
+                event_type: "funds_transfer".into(),
+                transaction: Transaction { amount: 15_000.0 },
+                signals: Signals {
+                    beneficiary_consortium_hit: true,
+                    consortium_confirmations: 3,
+                    consortium_confidence: Some(0.88),
+                    ..Default::default()
+                },
+            },
+        };
+
+        let res = evaluate(&policy, req, None);
+        assert_eq!(res.decision, "HOLD");
+        assert_eq!(res.risk_band, "high");
+        assert_eq!(res.risk_score, 0.45);
+        assert_eq!(res.reasons.len(), 1);
+        assert_eq!(res.reasons[0].code, "BENEFICIARY_CONSORTIUM_HIT");
+    }
+
+    #[test]
+    fn test_mule_graph_anomaly_triggers_hold() {
+        let policy = test_policy();
+        let req = Request {
+            _tenant: "demo".into(),
+            event: Event {
+                tenant_event_id: "evt_graph_1".into(),
+                occurred_at: "2026-10-31T12:00:00+03:00".into(),
+                channel: "mobile_app".into(),
+                event_type: "funds_transfer".into(),
+                transaction: Transaction { amount: 20_000.0 },
+                signals: Signals {
+                    graph_mule_likelihood: Some(0.85),
+                    ..Default::default()
+                },
+            },
+        };
+
+        let res = evaluate(&policy, req, None);
+        assert_eq!(res.decision, "HOLD");
+        assert_eq!(res.risk_band, "high");
+        assert_eq!(res.risk_score, 0.35);
+        assert_eq!(res.reasons.len(), 1);
+        assert_eq!(res.reasons[0].code, "MULE_GRAPH_RISK");
+    }
+
+    #[test]
+    fn test_agent_float_anomaly_triggers_hold() {
+        let policy = test_policy();
+        let req = Request {
+            _tenant: "demo".into(),
+            event: Event {
+                tenant_event_id: "evt_mule_1".into(),
+                occurred_at: "2026-10-31T12:00:00+03:00".into(),
+                channel: "agent".into(),
+                event_type: "agent_float_movement".into(),
+                transaction: Transaction { amount: 98_000.0 },
+                signals: Signals {
+                    agent_float_anomaly: true,
+                    ..Default::default()
+                },
+            },
+        };
+
+        let res = evaluate(&policy, req, None);
+        assert_eq!(res.decision, "HOLD");
+        assert_eq!(res.risk_score, 0.30);
+        assert_eq!(res.reasons.len(), 1);
+        assert_eq!(res.reasons[0].code, "AGENT_FLOAT_ANOMALY");
     }
 }
