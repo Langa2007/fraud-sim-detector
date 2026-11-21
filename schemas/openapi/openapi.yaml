@@ -98,6 +98,73 @@ paths:
         '200': { description: Case decision, review history and verified evidence record }
         '404': { description: Case does not exist in this tenant }
         '503': { description: Evidence chain unavailable or invalid }
+  /v1/cases/{caseID}/evidence/pack:
+    get:
+      summary: Export complete printable evidence pack document with SHA-256 seal (HTML)
+      security: [{ HMAC: [] }]
+      parameters:
+        - { in: path, name: caseID, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Standalone HTML evidence pack report }
+        '404': { description: Case does not exist }
+        '503': { description: Evidence chain unavailable or invalid }
+  /v1/stepup/challenges:
+    post:
+      summary: Initiate an out-of-band step-up challenge
+      security: [{ HMAC: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/StepUpInitiate' }
+      responses:
+        '201': { description: Step-up challenge initiated }
+        '400': { description: Invalid request }
+        '401': { description: Unauthorized }
+  /v1/stepup/challenges/{challengeID}:
+    get:
+      summary: Retrieve step-up challenge status
+      security: [{ HMAC: [] }]
+      parameters:
+        - { in: path, name: challengeID, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Step-up challenge details }
+        '404': { description: Challenge not found }
+  /v1/stepup/challenges/{challengeID}/respond:
+    post:
+      summary: Respond to a step-up challenge (customer verification)
+      security: [{ HMAC: [] }]
+      parameters:
+        - { in: path, name: challengeID, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [approved]
+              properties:
+                approved: { type: boolean }
+      responses:
+        '200': { description: Challenge resolved }
+        '404': { description: Challenge not found }
+        '409': { description: Challenge expired or already decided }
+  /v1/rollout:
+    get:
+      summary: Get tenant staged rollout status and friction metrics
+      security: [{ HMAC: [] }]
+      responses:
+        '200': { description: Current rollout configuration and mode }
+    post:
+      summary: Update staged rollout percentage, target mode or kill switch
+      security: [{ HMAC: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RolloutConfig' }
+      responses:
+        '200': { description: Rollout updated }
 components:
   schemas:
     OutcomeSubmission:
@@ -123,6 +190,24 @@ components:
         reviewer: { type: string, minLength: 1, maxLength: 128 }
         assignee: { type: string, maxLength: 128 }
         note: { type: string, maxLength: 1000 }
+    StepUpInitiate:
+      type: object
+      required: [tenant_event_id, channel, language, amount, beneficiary]
+      properties:
+        tenant_event_id: { type: string }
+        channel: { type: string, enum: [ussd_push, sms_callback, in_app] }
+        language: { type: string, enum: [sw, en] }
+        amount: { type: number }
+        beneficiary: { type: string }
+        ttl_seconds: { type: integer, default: 120 }
+    RolloutConfig:
+      type: object
+      properties:
+        target_mode: { type: string, enum: [shadow, advisory, enforce] }
+        rollout_percentage: { type: integer, minimum: 0, maximum: 100 }
+        kill_switch_active: { type: boolean }
+        friction_ceiling: { type: number }
+        friction_window: { type: integer }
   securitySchemes:
     HMAC:
       type: apiKey

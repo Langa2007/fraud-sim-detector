@@ -32,3 +32,12 @@ verify-evidence path="data/evidence.jsonl":
 
 synth count="1000" out="synthetic.jsonl":
     python3 tools/synth/generate.py --count {{count}} --out {{out}}
+
+check-features:
+    python3 tools/ml/check_feature_contract.py
+
+prepare-dataset events outcomes out tenant="demo":
+    python3 tools/ml/prepare_dataset.py {{events}} {{outcomes}} {{out}} --tenant {{tenant}}
+
+train data="data/labelled.jsonl" out="models/current":
+    python3 tools/ml/train.py {{data}} --out {{out}}

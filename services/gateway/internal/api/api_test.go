@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -188,5 +189,79 @@ func TestAPIEndToEnd(t *testing.T) {
 	h.ServeHTTP(recVerify, httptest.NewRequest("GET", "/v1/evidence/verify", nil))
 	if recVerify.Code != 200 {
 		t.Fatalf("evidence verify failed with status %d: %s", recVerify.Code, recVerify.Body.String())
+	}
+
+	// 8. Test Step-up Challenge lifecycle
+	stepUpPayload := `{"tenant_event_id":"evt_test_001","channel":"ussd_push","language":"sw","amount":75000,"beneficiary":"ben_888","ttl_seconds":60}`
+	stepUpTs := strconv.FormatInt(time.Now().Unix(), 10)
+	stepUpSig := auth.Sign(keys["test-key"].Secret, stepUpTs, stepUpPayload)
+
+	reqStepUp := httptest.NewRequest("POST", "/v1/stepup/challenges", bytes.NewReader([]byte(stepUpPayload)))
+	reqStepUp.Header.Set("Content-Type", "application/json")
+	reqStepUp.Header.Set("X-Kinga-Key", "test-key")
+	reqStepUp.Header.Set("X-Kinga-Timestamp", stepUpTs)
+	reqStepUp.Header.Set("X-Kinga-Signature", stepUpSig)
+
+	recStepUp := httptest.NewRecorder()
+	h.ServeHTTP(recStepUp, reqStepUp)
+	if recStepUp.Code != 201 {
+		t.Fatalf("stepup initiation failed with status %d: %s", recStepUp.Code, recStepUp.Body.String())
+	}
+	var chResp map[string]any
+	_ = json.Unmarshal(recStepUp.Body.Bytes(), &chResp)
+	chID := chResp["challenge_id"].(string)
+
+	// Fetch step-up challenge
+	reqGetCh := httptest.NewRequest("GET", "/v1/stepup/challenges/"+chID, nil)
+	reqGetCh.Header.Set("X-Kinga-Key", "test-key")
+	reqGetCh.Header.Set("X-Kinga-Timestamp", stepUpTs)
+	reqGetCh.Header.Set("X-Kinga-Signature", auth.Sign(keys["test-key"].Secret, stepUpTs, ""))
+	recGetCh := httptest.NewRecorder()
+	h.ServeHTTP(recGetCh, reqGetCh)
+	if recGetCh.Code != 200 {
+		t.Fatalf("get stepup failed with status %d", recGetCh.Code)
+	}
+
+	// Respond to step-up challenge
+	respPayload := `{"approved":true}`
+	respSig := auth.Sign(keys["test-key"].Secret, stepUpTs, respPayload)
+	reqRespCh := httptest.NewRequest("POST", "/v1/stepup/challenges/"+chID+"/respond", bytes.NewReader([]byte(respPayload)))
+	reqRespCh.Header.Set("Content-Type", "application/json")
+	reqRespCh.Header.Set("X-Kinga-Key", "test-key")
+	reqRespCh.Header.Set("X-Kinga-Timestamp", stepUpTs)
+	reqRespCh.Header.Set("X-Kinga-Signature", respSig)
+	recRespCh := httptest.NewRecorder()
+	h.ServeHTTP(recRespCh, reqRespCh)
+	if recRespCh.Code != 200 {
+		t.Fatalf("respond stepup failed with status %d", recRespCh.Code)
+	}
+
+	// 9. Test Rollout configuration
+	rolloutPayload := `{"target_mode":"enforce","rollout_percentage":25,"kill_switch_active":false,"friction_ceiling":0.015,"friction_window":500}`
+	rolloutSig := auth.Sign(keys["test-key"].Secret, stepUpTs, rolloutPayload)
+	reqRollout := httptest.NewRequest("POST", "/v1/rollout", bytes.NewReader([]byte(rolloutPayload)))
+	reqRollout.Header.Set("Content-Type", "application/json")
+	reqRollout.Header.Set("X-Kinga-Key", "test-key")
+	reqRollout.Header.Set("X-Kinga-Timestamp", stepUpTs)
+	reqRollout.Header.Set("X-Kinga-Signature", rolloutSig)
+	recRollout := httptest.NewRecorder()
+	h.ServeHTTP(recRollout, reqRollout)
+	if recRollout.Code != 200 {
+		t.Fatalf("set rollout failed with status %d", recRollout.Code)
+	}
+
+	// 10. Test Case Evidence Pack HTML export
+	casesList := caseLog.List("demo", "open", 10)
+	if len(casesList) > 0 {
+		caseID := casesList[0].CaseID
+		reqPack := httptest.NewRequest("GET", "/v1/cases/"+caseID+"/evidence/pack", nil)
+		reqPack.Header.Set("X-Kinga-Key", "test-key")
+		reqPack.Header.Set("X-Kinga-Timestamp", stepUpTs)
+		reqPack.Header.Set("X-Kinga-Signature", auth.Sign(keys["test-key"].Secret, stepUpTs, ""))
+		recPack := httptest.NewRecorder()
+		h.ServeHTTP(recPack, reqPack)
+		if recPack.Code != 200 || !strings.Contains(recPack.Body.String(), "Kinga Fraud Evidence Pack") {
+			t.Fatalf("evidence pack failed with status %d: %s", recPack.Code, recPack.Body.String())
+		}
 	}
 }

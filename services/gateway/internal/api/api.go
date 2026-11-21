@@ -24,7 +24,9 @@ import (
 	"kinga/services/gateway/internal/engine"
 	"kinga/services/gateway/internal/evidence"
 	"kinga/services/gateway/internal/features"
+	"kinga/services/gateway/internal/migration"
 	"kinga/services/gateway/internal/outcomes"
+	"kinga/services/gateway/internal/stepup"
 	"kinga/services/gateway/internal/store"
 	"kinga/services/gateway/internal/telco"
 )
@@ -35,6 +37,8 @@ type API struct {
 	evidence         *evidence.Log
 	cases            *cases.Store
 	outcomes         *outcomes.Store
+	stepup           *stepup.Orchestrator
+	migration        *migration.Manager
 	features         *features.Runtime
 	telco            telco.Connector
 	keys             map[string]auth.Credential
@@ -60,7 +64,23 @@ type keyLock struct {
 }
 
 func New(s *store.Store, e *engine.Client, l *evidence.Log, cs *cases.Store, o *outcomes.Store, k map[string]auth.Credential, c config.Config, f *features.Runtime, t telco.Connector) *API {
-	a := &API{idem: s, engine: e, evidence: l, cases: cs, outcomes: o, features: f, telco: t, keys: k, cfg: c, mux: http.NewServeMux(), rates: map[string]rateWindow{}, keyLocks: map[string]*keyLock{}, decisionCounters: map[string]uint64{}}
+	a := &API{
+		idem:             s,
+		engine:           e,
+		evidence:         l,
+		cases:            cs,
+		outcomes:         o,
+		stepup:           stepup.NewOrchestrator(),
+		migration:        migration.NewManager(),
+		features:         f,
+		telco:            t,
+		keys:             k,
+		cfg:              c,
+		mux:              http.NewServeMux(),
+		rates:            map[string]rateWindow{},
+		keyLocks:         map[string]*keyLock{},
+		decisionCounters: map[string]uint64{},
+	}
 	a.mux.HandleFunc("GET /healthz", a.health)
 	a.mux.HandleFunc("GET /readyz", a.ready)
 	a.mux.HandleFunc("GET /metrics", a.metrics)
@@ -70,6 +90,12 @@ func New(s *store.Store, e *engine.Client, l *evidence.Log, cs *cases.Store, o *
 	a.mux.HandleFunc("GET /v1/cases", a.listCases)
 	a.mux.HandleFunc("POST /v1/cases/{caseID}/actions", a.applyCaseAction)
 	a.mux.HandleFunc("GET /v1/cases/{caseID}/evidence", a.exportCaseEvidence)
+	a.mux.HandleFunc("GET /v1/cases/{caseID}/evidence/pack", a.exportCaseEvidencePack)
+	a.mux.HandleFunc("POST /v1/stepup/challenges", a.initiateStepUp)
+	a.mux.HandleFunc("GET /v1/stepup/challenges/{challengeID}", a.getStepUp)
+	a.mux.HandleFunc("POST /v1/stepup/challenges/{challengeID}/respond", a.respondStepUp)
+	a.mux.HandleFunc("GET /v1/rollout", a.getRollout)
+	a.mux.HandleFunc("POST /v1/rollout", a.setRollout)
 	return a
 }
 func (a *API) ServeHTTP(w http.ResponseWriter, r *http.Request) { a.mux.ServeHTTP(w, r) }
@@ -77,6 +103,19 @@ func write(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
+}
+
+func readBounded(w http.ResponseWriter, r *http.Request, maxBytes int64) ([]byte, bool) {
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxBytes+1))
+	if err != nil {
+		write(w, http.StatusBadRequest, map[string]string{"error": "cannot_read_body"})
+		return nil, false
+	}
+	if int64(len(body)) > maxBytes {
+		write(w, http.StatusRequestEntityTooLarge, map[string]string{"error": "request_body_too_large"})
+		return nil, false
+	}
+	return body, true
 }
 
 func signedCredential(r *http.Request, body []byte, keys map[string]auth.Credential) (auth.Credential, bool) {
@@ -238,6 +277,13 @@ func (a *API) assess(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	result.LatencyMS = time.Since(started).Milliseconds()
+	rolloutMode := a.migration.EvaluateMode(cred.Tenant, ev.Subject.AccountRef)
+	if rolloutMode == migration.ModeEnforce {
+		result.Mode = "enforce"
+	} else if rolloutMode == migration.ModeAdvisory {
+		result.Mode = "advisory"
+	}
+	a.migration.RecordOutcome(cred.Tenant, result.Decision != "ALLOW")
 	a.recordDecision(result)
 	featureSnapshot, _ := json.Marshal(ev.Signals)
 	eid, err := a.evidence.Append(cred.Tenant, ev.TenantEventID, body, featureSnapshot, func(evidenceID string) ([]byte, error) { result.EvidenceID = evidenceID; return json.Marshal(result) })
@@ -525,4 +571,215 @@ func (a *API) exportCaseEvidence(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Kinga-Tenant", credential.Tenant)
 	w.Header().Set("Content-Disposition", "attachment; filename=case-evidence.json")
 	write(w, http.StatusOK, map[string]any{"export_version": "1", "generated_at": time.Now().UTC(), "case": caseRecord, "evidence": evidenceRecord})
+}
+
+type stepUpRequest struct {
+	TenantEventID string  `json:"tenant_event_id"`
+	Channel       string  `json:"channel"`
+	Language      string  `json:"language"`
+	Amount        float64 `json:"amount"`
+	Beneficiary   string  `json:"beneficiary"`
+	TTLSeconds    int     `json:"ttl_seconds"`
+}
+
+func (a *API) initiateStepUp(w http.ResponseWriter, r *http.Request) {
+	body, ok := readBounded(w, r, 16*1024)
+	if !ok {
+		return
+	}
+	credential, ok := signedCredential(r, body, a.keys)
+	if !ok {
+		write(w, http.StatusUnauthorized, map[string]string{"error": "invalid_api_credentials_or_signature"})
+		return
+	}
+	var req stepUpRequest
+	if err := json.Unmarshal(body, &req); err != nil || req.TenantEventID == "" {
+		write(w, http.StatusBadRequest, map[string]string{"error": "invalid_stepup_request"})
+		return
+	}
+	ttl := time.Duration(req.TTLSeconds) * time.Second
+	ch, err := a.stepup.Initiate(credential.Tenant, req.TenantEventID, stepup.Channel(req.Channel), req.Language, req.Amount, req.Beneficiary, ttl)
+	if err != nil {
+		write(w, http.StatusInternalServerError, map[string]string{"error": "stepup_initiation_failed"})
+		return
+	}
+	w.Header().Set("X-Kinga-Tenant", credential.Tenant)
+	write(w, http.StatusCreated, ch)
+}
+
+func (a *API) getStepUp(w http.ResponseWriter, r *http.Request) {
+	credential, ok := signedCredential(r, nil, a.keys)
+	if !ok {
+		write(w, http.StatusUnauthorized, map[string]string{"error": "invalid_api_credentials_or_signature"})
+		return
+	}
+	ch, err := a.stepup.Get(credential.Tenant, r.PathValue("challengeID"))
+	if err != nil {
+		write(w, http.StatusNotFound, map[string]string{"error": "challenge_not_found"})
+		return
+	}
+	w.Header().Set("X-Kinga-Tenant", credential.Tenant)
+	write(w, http.StatusOK, ch)
+}
+
+func (a *API) respondStepUp(w http.ResponseWriter, r *http.Request) {
+	body, ok := readBounded(w, r, 16*1024)
+	if !ok {
+		return
+	}
+	credential, ok := signedCredential(r, body, a.keys)
+	if !ok {
+		write(w, http.StatusUnauthorized, map[string]string{"error": "invalid_api_credentials_or_signature"})
+		return
+	}
+	var req struct {
+		Approved bool `json:"approved"`
+	}
+	if err := json.Unmarshal(body, &req); err != nil {
+		write(w, http.StatusBadRequest, map[string]string{"error": "invalid_response_body"})
+		return
+	}
+	ch, err := a.stepup.Respond(credential.Tenant, r.PathValue("challengeID"), req.Approved)
+	if err != nil {
+		if errors.Is(err, stepup.ErrNotFound) {
+			write(w, http.StatusNotFound, map[string]string{"error": "challenge_not_found"})
+		} else {
+			write(w, http.StatusConflict, map[string]string{"error": "challenge_already_resolved_or_expired", "detail": err.Error()})
+		}
+		return
+	}
+	w.Header().Set("X-Kinga-Tenant", credential.Tenant)
+	write(w, http.StatusOK, ch)
+}
+
+func (a *API) getRollout(w http.ResponseWriter, r *http.Request) {
+	credential, ok := signedCredential(r, nil, a.keys)
+	if !ok {
+		write(w, http.StatusUnauthorized, map[string]string{"error": "invalid_api_credentials_or_signature"})
+		return
+	}
+	cfg := a.migration.GetConfig(credential.Tenant)
+	rollbackReason := a.migration.GetAutoRollbackReason(credential.Tenant)
+	w.Header().Set("X-Kinga-Tenant", credential.Tenant)
+	write(w, http.StatusOK, map[string]any{
+		"tenant":               credential.Tenant,
+		"config":               cfg,
+		"auto_rollback_reason": rollbackReason,
+	})
+}
+
+func (a *API) setRollout(w http.ResponseWriter, r *http.Request) {
+	body, ok := readBounded(w, r, 16*1024)
+	if !ok {
+		return
+	}
+	credential, ok := signedCredential(r, body, a.keys)
+	if !ok {
+		write(w, http.StatusUnauthorized, map[string]string{"error": "invalid_api_credentials_or_signature"})
+		return
+	}
+	var req migration.Config
+	if err := json.Unmarshal(body, &req); err != nil {
+		write(w, http.StatusBadRequest, map[string]string{"error": "invalid_rollout_config"})
+		return
+	}
+	a.migration.SetConfig(credential.Tenant, req)
+	w.Header().Set("X-Kinga-Tenant", credential.Tenant)
+	write(w, http.StatusOK, map[string]any{"status": "updated", "config": req})
+}
+
+func (a *API) exportCaseEvidencePack(w http.ResponseWriter, r *http.Request) {
+	credential, ok := signedCredential(r, nil, a.keys)
+	if !ok {
+		write(w, http.StatusUnauthorized, map[string]string{"error": "invalid_api_credentials_or_signature"})
+		return
+	}
+	caseRecord, err := a.cases.Get(credential.Tenant, r.PathValue("caseID"))
+	if err != nil {
+		write(w, http.StatusNotFound, map[string]string{"error": "case_not_found"})
+		return
+	}
+	evidenceRecord, err := a.evidence.Find(credential.Tenant, caseRecord.EvidenceID)
+	if err != nil {
+		write(w, http.StatusServiceUnavailable, map[string]string{"error": "evidence_unavailable_or_invalid"})
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("X-Kinga-Tenant", credential.Tenant)
+
+	reasonsHTML := ""
+	for _, r := range caseRecord.Reasons {
+		reasonsHTML += fmt.Sprintf(`<tr><td><code>%s</code></td><td>%.2f</td><td>%s</td></tr>`, r.Code, r.Weight, r.Detail)
+	}
+
+	historyHTML := ""
+	for _, h := range caseRecord.History {
+		historyHTML += fmt.Sprintf(`<tr><td>%s</td><td><strong>%s</strong></td><td>%s</td><td>%s</td></tr>`,
+			h.CreatedAt.Format(time.RFC3339), h.Type, h.Reviewer, h.Note)
+	}
+
+	html := fmt.Sprintf(`<!DOCTYPE html>
+<html>
+<head>
+<title>Kinga Evidence Pack - %s</title>
+<style>
+body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 40px; color: #1e293b; background: #fff; }
+.header { border-bottom: 2px solid #0f172a; padding-bottom: 20px; margin-bottom: 24px; }
+.seal { float: right; border: 2px solid #16a34a; color: #16a34a; padding: 6px 12px; border-radius: 4px; font-weight: 700; font-size: 0.8rem; text-transform: uppercase; }
+h1 { margin: 0; font-size: 1.5rem; color: #0f172a; }
+.meta { margin-top: 8px; color: #64748b; font-size: 0.9rem; }
+.card { border: 1px solid #cbd5e1; border-radius: 6px; padding: 16px; margin-bottom: 24px; }
+h2 { font-size: 1.1rem; border-bottom: 1px solid #e2e8f0; padding-bottom: 8px; margin-top: 0; }
+table { width: 100%%; border-collapse: collapse; margin-top: 12px; font-size: 0.9rem; }
+th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid #e2e8f0; }
+th { background: #f8fafc; color: #475569; }
+code { font-family: ui-monospace, SFMono-Regular, monospace; background: #f1f5f9; padding: 2px 4px; border-radius: 3px; font-size: 0.85rem; }
+@media print { body { margin: 0; } }
+</style>
+</head>
+<body>
+<div class="seal">✓ SHA-256 Hash Chain Verified</div>
+<div class="header">
+  <h1>Kinga Fraud Evidence Pack</h1>
+  <div class="meta">Case ID: <code>%s</code> | Tenant: <strong>%s</strong> | Event: <code>%s</code> | Generated: %s</div>
+</div>
+
+<div class="card">
+  <h2>Decision & Risk Summary</h2>
+  <table>
+    <tr><th>Decision</th><td><strong>%s</strong> (Mode: %s)</td></tr>
+    <tr><th>Risk Score</th><td>%.2f (Band: %s)</td></tr>
+    <tr><th>Evidence ID</th><td><code>%s</code> (Sequence #%d)</td></tr>
+    <tr><th>Policy / Model Version</th><td>%s / %v</td></tr>
+    <tr><th>Raw Event Hash</th><td><code>%s</code></td></tr>
+    <tr><th>Chain Record Hash</th><td><code>%s</code></td></tr>
+  </table>
+</div>
+
+<div class="card">
+  <h2>Risk Contributing Reasons</h2>
+  <table>
+    <thead><tr><th>Reason Code</th><th>Weight</th><th>Detail</th></tr></thead>
+    <tbody>%s</tbody>
+  </table>
+</div>
+
+<div class="card">
+  <h2>Reviewer & Case Timeline</h2>
+  <table>
+    <thead><tr><th>Timestamp</th><th>Action</th><th>Reviewer</th><th>Notes / Rationale</th></tr></thead>
+    <tbody>%s</tbody>
+  </table>
+</div>
+</body>
+</html>`,
+		caseRecord.CaseID, caseRecord.CaseID, credential.Tenant, caseRecord.TenantEventID, time.Now().UTC().Format(time.RFC3339),
+		caseRecord.Decision, caseRecord.Decision, caseRecord.RiskScore, caseRecord.RiskBand,
+		evidenceRecord.EvidenceID, evidenceRecord.Sequence, caseRecord.PolicyVersion, caseRecord.ModelVersion,
+		evidenceRecord.EventHash, evidenceRecord.Hash,
+		reasonsHTML, historyHTML,
+	)
+
+	_, _ = w.Write([]byte(html))
 }
