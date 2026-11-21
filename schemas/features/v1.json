@@ -1,0 +1,21 @@
+{
+  "schema_version": "kinga.features.v1",
+  "missing_values": "zero with an explicit known indicator for optional values",
+  "features": [
+    {"name": "amount_kes", "source": "transaction.amount", "type": "float32", "unit": "KES"},
+    {"name": "sim_swap_age_minutes", "source": "signals.sim_swap_age_minutes", "type": "float32", "unit": "minutes"},
+    {"name": "sim_swap_known", "source": "signals.sim_swap_age_minutes != null", "type": "float32"},
+    {"name": "device_first_seen", "source": "signals.device_first_seen", "type": "float32", "encoding": "boolean 0/1"},
+    {"name": "beneficiary_first_seen", "source": "signals.beneficiary_first_seen", "type": "float32", "encoding": "boolean 0/1"},
+    {"name": "balance_drain_ratio", "source": "signals.balance_drain_ratio", "type": "float32", "unit": "ratio"},
+    {"name": "transfers_in_window", "source": "signals.transfers_in_window", "type": "float32", "unit": "count"},
+    {"name": "new_beneficiaries_in_window", "source": "signals.new_beneficiaries_in_window", "type": "float32", "unit": "count"},
+    {"name": "window_minutes", "source": "signals.window_minutes", "type": "float32", "unit": "minutes"},
+    {"name": "account_age_days", "source": "signals.account_age_days", "type": "float32", "unit": "days"},
+    {"name": "account_age_known", "source": "signals.account_age_days != null", "type": "float32"},
+    {"name": "inbound_fan_in", "source": "signals.inbound_fan_in", "type": "float32", "unit": "count"},
+    {"name": "rapid_outbound", "source": "signals.rapid_outbound", "type": "float32", "encoding": "boolean 0/1"},
+    {"name": "overnight", "source": "occurred_at local hour outside 05:00-22:00", "type": "float32", "encoding": "boolean 0/1"},
+    {"name": "is_funds_transfer", "source": "event_type == funds_transfer", "type": "float32", "encoding": "boolean 0/1"}
+  ]
+}

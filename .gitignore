@@ -3,6 +3,8 @@
 /kinga
 /cmd
 /engine/target/
+/models/*
+!/models/README.md
 __pycache__/
 *.py[cod]
 Structure.md

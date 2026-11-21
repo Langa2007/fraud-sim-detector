@@ -4,6 +4,11 @@ services:
       context: .
       dockerfile: engine/Dockerfile
     expose: ["8090"]
+    environment:
+      KINGA_MODEL_PATH: ${KINGA_MODEL_PATH:-}
+      KINGA_MODEL_CARD_PATH: ${KINGA_MODEL_CARD_PATH:-}
+    volumes:
+      - ./models:/app/models:ro
     restart: unless-stopped
   kinga:
     build:
@@ -15,6 +20,8 @@ services:
       KINGA_TELCO_SIMULATOR_PATH: /app/testdata/telco/simulator.json
       KINGA_API_KEYS: ${KINGA_API_KEYS:-demo:demo-key:demo-secret}
       KINGA_EVIDENCE_PATH: /data/evidence.jsonl
+      KINGA_OUTCOME_PATH: /data/outcomes.jsonl
+      KINGA_CASE_PATH: /data/cases.jsonl
     ports: ["8080:8080"]
     volumes: ["kinga-evidence:/data"]
     read_only: true

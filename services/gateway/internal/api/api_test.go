@@ -12,10 +12,12 @@ import (
 	"time"
 
 	"kinga/services/gateway/internal/auth"
+	"kinga/services/gateway/internal/cases"
 	"kinga/services/gateway/internal/config"
 	"kinga/services/gateway/internal/engine"
 	"kinga/services/gateway/internal/evidence"
 	"kinga/services/gateway/internal/features"
+	"kinga/services/gateway/internal/outcomes"
 	"kinga/services/gateway/internal/store"
 	"kinga/services/gateway/internal/telco"
 )
@@ -62,6 +64,16 @@ func TestAPIEndToEnd(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer evLog.Close()
+	outcomeLog, err := outcomes.Open(filepath.Join(dir, "outcomes.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer outcomeLog.Close()
+	caseLog, err := cases.Open(filepath.Join(dir, "cases.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer caseLog.Close()
 
 	simPath := filepath.Join(dir, "simulator.json")
 	_ = os.WriteFile(simPath, []byte(`{"+254712345678": 38}`), 0600)
@@ -81,7 +93,7 @@ func TestAPIEndToEnd(t *testing.T) {
 	}
 
 	client := engine.NewClient(engineSrv.URL, 500*time.Millisecond)
-	h := New(store.New("1h"), client, evLog, keys, cfg, features.NewRuntime(), sim)
+	h := New(store.New("1h"), client, evLog, caseLog, outcomeLog, keys, cfg, features.NewRuntime(), sim)
 
 	// 3. Test Health & Readyz
 	rec := httptest.NewRecorder()

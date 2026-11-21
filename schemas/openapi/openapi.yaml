@@ -41,7 +41,88 @@ paths:
       responses:
         '200': { description: Evidence file verified }
         '500': { description: Chain integrity failure }
+  /v1/outcomes:
+    post:
+      summary: Submit an audited fraud review outcome for a tenant event
+      description: Outcomes are tenant-scoped, idempotent by submission_id and written to an append-only hash-chained ledger.
+      security: [{ HMAC: [] }]
+      parameters:
+        - { in: header, name: Idempotency-Key, required: true, schema: { type: string } }
+        - { in: header, name: X-Kinga-Key, required: true, schema: { type: string } }
+        - { in: header, name: X-Kinga-Timestamp, required: true, schema: { type: integer, format: int64 } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/OutcomeSubmission' }
+      responses:
+        '202': { description: Outcome durably recorded }
+        '401': { description: Missing or invalid credentials/signature }
+        '409': { description: Submission ID reused with a different outcome }
+        '422': { description: Invalid outcome }
+  /v1/cases:
+    get:
+      summary: List recent cases for the authenticated tenant
+      security: [{ HMAC: [] }]
+      parameters:
+        - { in: query, name: status, schema: { type: string, enum: [open, assigned, released, held] } }
+        - { in: query, name: limit, schema: { type: integer, minimum: 1, maximum: 100, default: 50 } }
+      responses:
+        '200': { description: Tenant-scoped cases ordered by latest update }
+        '401': { description: Missing or invalid credentials/signature }
+  /v1/cases/{caseID}/actions:
+    post:
+      summary: Assign, annotate, or record a human case disposition
+      description: Hold and release update the advisory case only; they do not affect a transaction.
+      security: [{ HMAC: [] }]
+      parameters:
+        - { in: path, name: caseID, required: true, schema: { type: string } }
+        - { in: header, name: Idempotency-Key, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CaseAction' }
+      responses:
+        '200': { description: Case updated }
+        '404': { description: Case does not exist in this tenant }
+        '409': { description: Action conflicts with the case state }
+        '503': { description: Case ledger unavailable }
+  /v1/cases/{caseID}/evidence:
+    get:
+      summary: Export case and verified evidence chain record as JSON
+      security: [{ HMAC: [] }]
+      parameters:
+        - { in: path, name: caseID, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Case decision, review history and verified evidence record }
+        '404': { description: Case does not exist in this tenant }
+        '503': { description: Evidence chain unavailable or invalid }
 components:
+  schemas:
+    OutcomeSubmission:
+      type: object
+      additionalProperties: false
+      required: [submission_id, tenant_event_id, evidence_id, label, reviewer, observed_at]
+      properties:
+        submission_id: { type: string, minLength: 1, maxLength: 128 }
+        tenant_event_id: { type: string, minLength: 1, maxLength: 128 }
+        evidence_id: { type: string, minLength: 1, maxLength: 160 }
+        label: { type: string, enum: [confirmed_fraud, false_positive, legitimate, unknown] }
+        reviewer: { type: string, minLength: 1, maxLength: 128 }
+        notes: { type: string, maxLength: 512 }
+        loss_kes: { type: number, minimum: 0 }
+        observed_at: { type: string, format: date-time }
+    CaseAction:
+      type: object
+      additionalProperties: false
+      required: [action_id, type, reviewer]
+      properties:
+        action_id: { type: string, minLength: 1, maxLength: 128 }
+        type: { type: string, enum: [assign, note, release, hold] }
+        reviewer: { type: string, minLength: 1, maxLength: 128 }
+        assignee: { type: string, maxLength: 128 }
+        note: { type: string, maxLength: 1000 }
   securitySchemes:
     HMAC:
       type: apiKey

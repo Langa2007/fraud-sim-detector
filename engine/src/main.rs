@@ -3,10 +3,136 @@ use std::{
     env, fs,
     io::{Read, Write},
     net::{TcpListener, TcpStream},
+    path::Path,
     sync::Arc,
+    sync::Mutex,
     thread,
     time::Instant,
 };
+use tract_onnx::prelude::*;
+
+const FEATURE_ORDER: [&str; 15] = [
+    "amount_kes",
+    "sim_swap_age_minutes",
+    "sim_swap_known",
+    "device_first_seen",
+    "beneficiary_first_seen",
+    "balance_drain_ratio",
+    "transfers_in_window",
+    "new_beneficiaries_in_window",
+    "window_minutes",
+    "account_age_days",
+    "account_age_known",
+    "inbound_fan_in",
+    "rapid_outbound",
+    "overnight",
+    "is_funds_transfer",
+];
+
+type OnnxPlan = SimplePlan<TypedFact, Box<dyn TypedOp>, Graph<TypedFact, Box<dyn TypedOp>>>;
+
+#[derive(Deserialize)]
+struct ModelCard {
+    model_version: String,
+    feature_schema_version: String,
+    feature_order: Vec<String>,
+    calibration: Calibration,
+    operating_threshold: f64,
+}
+
+#[derive(Deserialize)]
+struct Calibration {
+    method: String,
+    slope: f64,
+    intercept: f64,
+}
+
+struct ModelRuntime {
+    card: ModelCard,
+    plan: Mutex<OnnxPlan>,
+}
+
+impl ModelRuntime {
+    fn load(model_path: &str, card_path: &str) -> Result<Self, String> {
+        let card_json = fs::read_to_string(card_path)
+            .map_err(|e| format!("cannot read model card {card_path}: {e}"))?;
+        let card: ModelCard =
+            serde_json::from_str(&card_json).map_err(|e| format!("invalid model card: {e}"))?;
+        let expected: Vec<String> = FEATURE_ORDER.iter().map(|v| (*v).to_string()).collect();
+        if card.model_version.is_empty()
+            || card.feature_schema_version != "kinga.features.v1"
+            || card.feature_order != expected
+            || card.calibration.method != "platt_scaling"
+            || !card.calibration.slope.is_finite()
+            || !card.calibration.intercept.is_finite()
+            || !card.operating_threshold.is_finite()
+            || !(0.0..=1.0).contains(&card.operating_threshold)
+        {
+            return Err(
+                "model card schema, feature order, calibration or threshold is invalid".into(),
+            );
+        }
+        let plan = tract_onnx::onnx()
+            .model_for_path(Path::new(model_path))
+            .map_err(|e| format!("cannot load ONNX model: {e}"))?
+            .into_optimized()
+            .map_err(|e| format!("cannot optimize ONNX model: {e}"))?
+            .into_runnable()
+            .map_err(|e| format!("cannot prepare ONNX model: {e}"))?;
+        let probe = tract_ndarray::Array2::<f32>::zeros((1, FEATURE_ORDER.len()));
+        let outputs = plan
+            .run(tvec!(probe.into_tensor().into()))
+            .map_err(|e| format!("ONNX startup inference failed: {e}"))?;
+        let has_binary_probabilities = outputs.iter().any(|value| {
+            value
+                .to_array_view::<f32>()
+                .map(|array| array.len() == 2)
+                .unwrap_or(false)
+        });
+        if !has_binary_probabilities {
+            return Err("ONNX model must expose two float class probabilities".into());
+        }
+        Ok(Self {
+            card,
+            plan: Mutex::new(plan),
+        })
+    }
+
+    fn score(&self, event: &Event) -> Result<f64, String> {
+        let values = event.features();
+        let input = tract_ndarray::Array2::from_shape_vec((1, FEATURE_ORDER.len()), values)
+            .map_err(|e| format!("cannot create model input: {e}"))?;
+        let plan = self
+            .plan
+            .lock()
+            .map_err(|_| "model runtime lock poisoned".to_string())?;
+        let outputs = plan
+            .run(tvec!(input.into_tensor().into()))
+            .map_err(|e| format!("ONNX inference failed: {e}"))?;
+        let raw = outputs
+            .iter()
+            .find_map(|value| {
+                let output = value.to_array_view::<f32>().ok()?;
+                (output.len() == 2)
+                    .then(|| output.iter().copied().nth(1))
+                    .flatten()
+            })
+            .ok_or_else(|| "ONNX model returned no binary probability output".to_string())?
+            as f64;
+        if !raw.is_finite() || !(0.0..=1.0).contains(&raw) {
+            return Err("ONNX model returned an invalid probability".into());
+        }
+        let raw = raw.clamp(1e-6, 1.0 - 1e-6);
+        let logit = (raw / (1.0 - raw)).ln();
+        let calibrated = 1.0
+            / (1.0
+                + (-(self.card.calibration.slope * logit + self.card.calibration.intercept)).exp());
+        if !calibrated.is_finite() {
+            return Err("model returned a non-finite score".into());
+        }
+        Ok(calibrated.clamp(0.0, 1.0))
+    }
+}
 
 #[derive(Clone, Deserialize)]
 struct Policy {
@@ -80,6 +206,8 @@ struct Event {
     occurred_at: String,
     channel: String,
     #[serde(default)]
+    event_type: String,
+    #[serde(default)]
     transaction: Transaction,
     #[serde(default)]
     signals: Signals,
@@ -110,6 +238,36 @@ struct Signals {
     #[serde(default)]
     rapid_outbound: bool,
 }
+
+impl Event {
+    fn features(&self) -> Vec<f32> {
+        let s = &self.signals;
+        let hour = self
+            .occurred_at
+            .split('T')
+            .nth(1)
+            .and_then(|v| v.get(0..2))
+            .and_then(|v| v.parse::<u32>().ok())
+            .unwrap_or(12);
+        vec![
+            self.transaction.amount.min(f32::MAX as f64) as f32,
+            s.sim_swap_age_minutes.unwrap_or(0) as f32,
+            s.sim_swap_age_minutes.is_some() as u8 as f32,
+            s.device_first_seen as u8 as f32,
+            s.beneficiary_first_seen as u8 as f32,
+            s.balance_drain_ratio.unwrap_or(0.0) as f32,
+            s.transfers_in_window as f32,
+            s.new_beneficiaries_in_window as f32,
+            s.window_minutes as f32,
+            s.account_age_days.unwrap_or(0) as f32,
+            s.account_age_days.is_some() as u8 as f32,
+            s.inbound_fan_in as f32,
+            s.rapid_outbound as u8 as f32,
+            (!(5..22).contains(&hour)) as u8 as f32,
+            (self.event_type == "funds_transfer") as u8 as f32,
+        ]
+    }
+}
 #[derive(Serialize)]
 struct Reason {
     code: String,
@@ -132,11 +290,11 @@ struct Response {
     evidence_id: String,
 }
 
-fn evaluate(policy: &Policy, request: Request) -> Response {
+fn evaluate(policy: &Policy, request: Request, model: Option<&ModelRuntime>) -> Response {
     let start = Instant::now();
     let ev = request.event;
     let telco_degraded = ev.signals.telco_available == Some(false);
-    let s = ev.signals;
+    let s = &ev.signals;
     let mut reasons: Vec<Reason> = Vec::new();
     let mut minimum_decision = "ALLOW";
     for rule in &policy.rules {
@@ -204,11 +362,30 @@ fn evaluate(policy: &Policy, request: Request) -> Response {
             .total_cmp(&a.weight)
             .then_with(|| a.code.cmp(&b.code))
     });
-    let score: f64 = reasons
+    let rule_score: f64 = reasons
         .iter()
         .map(|r| r.weight)
         .sum::<f64>()
         .clamp(0.0, 1.0);
+    let model_score = model.and_then(|m| m.score(&ev).ok());
+    if let (Some(runtime), Some(probability)) = (model, model_score)
+        && probability >= runtime.card.operating_threshold
+    {
+        reasons.push(Reason {
+            code: "MODEL_HIGH_RISK".into(),
+            detail: format!(
+                "Calibrated model probability {:.1}% reached the tenant operating threshold.",
+                probability * 100.0
+            ),
+            weight: probability,
+        });
+    }
+    reasons.sort_by(|a, b| {
+        b.weight
+            .total_cmp(&a.weight)
+            .then_with(|| a.code.cmp(&b.code))
+    });
+    let score = rule_score.max(model_score.unwrap_or(0.0));
     let (band, score_decision) = if score >= policy.score_bands.critical {
         ("critical", "HOLD")
     } else if score >= policy.score_bands.high {
@@ -240,10 +417,12 @@ fn evaluate(policy: &Policy, request: Request) -> Response {
         risk_band: band.into(),
         reasons,
         recommended_actions: actions,
-        degraded: telco_degraded,
+        degraded: telco_degraded || model.is_some() && model_score.is_none(),
         tenant_event_id: ev.tenant_event_id,
         policy_version: policy.policy_version.clone(),
-        model_version: None,
+        model_version: model
+            .filter(|_| model_score.is_some())
+            .map(|runtime| runtime.card.model_version.clone()),
         latency_ms: start.elapsed().as_millis(),
         evidence_id: String::new(),
     }
@@ -292,7 +471,7 @@ fn respond(stream: &mut TcpStream, status: &str, body: &[u8]) {
     let _ = stream.write_all(header.as_bytes());
     let _ = stream.write_all(body);
 }
-fn handle(mut stream: TcpStream, policy: Arc<Policy>) {
+fn handle(mut stream: TcpStream, policy: Arc<Policy>, model: Arc<Option<ModelRuntime>>) {
     let _ = stream.set_read_timeout(Some(std::time::Duration::from_millis(200)));
     let _ = stream.set_write_timeout(Some(std::time::Duration::from_millis(200)));
     let result = read_request(&mut stream);
@@ -317,7 +496,7 @@ fn handle(mut stream: TcpStream, policy: Arc<Policy>) {
     }
     match serde_json::from_slice::<Request>(&body) {
         Ok(req) => {
-            let response = evaluate(&policy, req);
+            let response = evaluate(&policy, req, model.as_ref().as_ref());
             match serde_json::to_vec(&response) {
                 Ok(bytes) => respond(&mut stream, "200 OK", &bytes),
                 Err(_) => respond(
@@ -371,6 +550,30 @@ fn main() {
             panic!("unsupported rule id: {}", r.id)
         }
     }
+    let model_path = env::var("KINGA_MODEL_PATH").unwrap_or_default();
+    let card_env = env::var("KINGA_MODEL_CARD_PATH").unwrap_or_default();
+    let model = if !model_path.trim().is_empty() {
+        let card_path = if card_env.trim().is_empty() {
+            Path::new(&model_path)
+                .with_file_name("model.json")
+                .to_string_lossy()
+                .to_string()
+        } else {
+            card_env
+        };
+        Some(
+            ModelRuntime::load(&model_path, &card_path)
+                .unwrap_or_else(|e| panic!("model startup failed: {e}")),
+        )
+    } else {
+        if !card_env.trim().is_empty() {
+            panic!("KINGA_MODEL_CARD_PATH requires KINGA_MODEL_PATH")
+        }
+        None
+    };
+    if let Some(runtime) = &model {
+        eprintln!("loaded fraud model {}", runtime.card.model_version);
+    }
     let addr = env::var("KINGA_ENGINE_ADDR").unwrap_or_else(|_| "0.0.0.0:8090".into());
     let listener = TcpListener::bind(&addr).expect("cannot bind decision engine");
     eprintln!(
@@ -378,11 +581,13 @@ fn main() {
         policy.policy_version
     );
     let policy = Arc::new(policy);
+    let model = Arc::new(model);
     for connection in listener.incoming() {
         match connection {
             Ok(stream) => {
                 let p = Arc::clone(&policy);
-                thread::spawn(move || handle(stream, p));
+                let m = Arc::clone(&model);
+                thread::spawn(move || handle(stream, p, m));
             }
             Err(e) => eprintln!("accept error: {e}"),
         }
@@ -461,6 +666,7 @@ mod tests {
                 tenant_event_id: "evt_clean_1".into(),
                 occurred_at: "2026-10-31T14:00:00+03:00".into(),
                 channel: "mobile_app".into(),
+                event_type: "funds_transfer".into(),
                 transaction: Transaction { amount: 500.0 },
                 signals: Signals {
                     sim_swap_age_minutes: None,
@@ -473,7 +679,7 @@ mod tests {
             },
         };
 
-        let res = evaluate(&policy, req);
+        let res = evaluate(&policy, req, None);
         assert_eq!(res.decision, "ALLOW");
         assert_eq!(res.risk_band, "low");
         assert_eq!(res.risk_score, 0.0);
@@ -491,6 +697,7 @@ mod tests {
                 tenant_event_id: "evt_swap_1".into(),
                 occurred_at: "2026-10-31T14:00:00+03:00".into(),
                 channel: "mobile_app".into(),
+                event_type: "funds_transfer".into(),
                 transaction: Transaction { amount: 60_000.0 },
                 signals: Signals {
                     sim_swap_age_minutes: Some(38),
@@ -502,7 +709,7 @@ mod tests {
             },
         };
 
-        let res = evaluate(&policy, req);
+        let res = evaluate(&policy, req, None);
         assert_eq!(res.decision, "STEP_UP");
         assert_eq!(res.risk_band, "high");
         assert_eq!(res.risk_score, 0.4);
@@ -519,6 +726,7 @@ mod tests {
                 tenant_event_id: "evt_critical_1".into(),
                 occurred_at: "2026-10-31T23:30:00+03:00".into(), // overnight
                 channel: "mobile_app".into(),
+                event_type: "funds_transfer".into(),
                 transaction: Transaction { amount: 100_000.0 },
                 signals: Signals {
                     sim_swap_age_minutes: Some(15),
@@ -531,7 +739,7 @@ mod tests {
             },
         };
 
-        let res = evaluate(&policy, req);
+        let res = evaluate(&policy, req, None);
         assert_eq!(res.decision, "HOLD");
         assert_eq!(res.risk_band, "critical");
         assert!(res.risk_score >= 0.7);
@@ -556,6 +764,7 @@ mod tests {
                 tenant_event_id: "evt_degraded_1".into(),
                 occurred_at: "2026-10-31T12:00:00+03:00".into(),
                 channel: "mobile_app".into(),
+                event_type: "funds_transfer".into(),
                 transaction: Transaction { amount: 1_000.0 },
                 signals: Signals {
                     sim_swap_age_minutes: None,
@@ -565,7 +774,7 @@ mod tests {
             },
         };
 
-        let res = evaluate(&policy, req);
+        let res = evaluate(&policy, req, None);
         assert!(res.degraded);
         assert_eq!(res.decision, "ALLOW");
     }

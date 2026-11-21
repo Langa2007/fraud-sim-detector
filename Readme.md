@@ -19,7 +19,13 @@ The gateway computes device/beneficiary first-seen and 15-minute velocity featur
 
 Generate deterministic synthetic events with `python3 tools/synth/generate.py --count 1000 --out synthetic.jsonl`, then replay them against a running service with `python3 tools/replay/replay.py synthetic.jsonl`. CSV rows can be converted and replayed with `python3 tools/ingest/csv_to_jsonl.py input.csv events.jsonl`; Parquet conversion is optional with `pyarrow`. Synthetic labels measure the mechanics of replay only; they are not evidence of real-world detection performance. API contract: [`schemas/openapi/openapi.yaml`](./schemas/openapi/openapi.yaml); canonical event schema: [`schemas/events/assessment.schema.json`](./schemas/events/assessment.schema.json); Rust RPC contract: [`schemas/engine/assess-request.schema.json`](./schemas/engine/assess-request.schema.json) and [`schemas/engine/assess-response.schema.json`](./schemas/engine/assess-response.schema.json); starter policy: [`policies/default.json`](./policies/default.json).
 
-This remains a development/staging foundation: idempotency and feature history are process-local; evidence is a single-writer local file; CSV/Parquet conversion is a CLI replay path rather than scheduled SFTP ingestion. Redis/Postgres/NATS, live Safaricom connectivity, a TypeScript console, full OpenTelemetry instrumentation, staging runbooks, and partner-data backtests remain open Phase 1 work. The exit gate has not been met.
+This remains a development/staging foundation: idempotency and feature history are process-local; evidence is a single-writer local file; CSV/Parquet conversion is a CLI replay path rather than scheduled SFTP ingestion. Redis/Postgres/NATS, live Safaricom connectivity, the investigator console, full OpenTelemetry instrumentation, staging runbooks, and partner-data backtests remain open Phase 1 work. The exit gate has not been met.
+
+## Phase 2 model and outcome loop
+
+The repository includes an offline, chronological gradient-boosted model pipeline with separate calibration and future holdout windows, Platt probability calibration, a calibration-set threshold at a configured false-positive ceiling, evaluation metrics/slices/drift indicators, ONNX export, and Rust-side ONNX inference. The ordered numeric feature contract is [`schemas/features/v1.json`](./schemas/features/v1.json). The authenticated `POST /v1/outcomes` endpoint writes reviewer labels to a local append-only, hash-chained ledger at `KINGA_OUTCOME_PATH` (default `data/outcomes.jsonl`). Flagged decisions create tenant-scoped cases; `/v1/cases` supports review assignment/disposition and `/v1/cases/{caseID}/evidence` exports the case plus its verified evidence record as JSON.
+
+See [`docs/ml/phase-two-model-loop.md`](./docs/ml/phase-two-model-loop.md) for dataset preparation, training, evaluation, labels and model deployment. Install the optional offline dependencies with `python3 -m pip install -r requirements-ml.txt`. Train only on approved partner data; synthetic generator metrics do not establish real fraud lift. The model remains shadow-only and Phase 2 exit gates remain open.
 
 ---
 
@@ -283,7 +289,7 @@ Large tier-1 banks come later, via the consortium (their confirmed indicators ar
 
 ## 14. Tech at a glance
 
-**Go** is the spine (APIs, connectors, orchestration), **Rust** is the sharp edge (decision core and tokenisation), **Python** is the brain (research, training, backtests). TypeScript for the investigator console. They talk through Protobuf/gRPC contracts, a shared feature spec, and ONNX model files. Full layout in [`STRUCTURE.md`](./STRUCTURE.md); delivery plan in [`PHASES.md`](./PHASES.md).
+**Go** is the spine (APIs, connectors, orchestration), **Rust** is the sharp edge (decision core and tokenisation), **Python** is the brain (research, training, backtests), and JavaScript powers the investigator console. They talk through Protobuf/gRPC contracts, a shared feature spec, and ONNX model files. Full layout in [`STRUCTURE.md`](./STRUCTURE.md); delivery plan in [`PHASES.md`](./PHASES.md).
 
 ---
 

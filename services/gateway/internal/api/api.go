@@ -7,8 +7,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"mime"
 	"net/http"
+	"os"
 	"regexp"
 	"sort"
 	"strconv"
@@ -17,10 +19,12 @@ import (
 	"time"
 
 	"kinga/services/gateway/internal/auth"
+	"kinga/services/gateway/internal/cases"
 	"kinga/services/gateway/internal/config"
 	"kinga/services/gateway/internal/engine"
 	"kinga/services/gateway/internal/evidence"
 	"kinga/services/gateway/internal/features"
+	"kinga/services/gateway/internal/outcomes"
 	"kinga/services/gateway/internal/store"
 	"kinga/services/gateway/internal/telco"
 )
@@ -29,6 +33,8 @@ type API struct {
 	idem             *store.Store
 	engine           *engine.Client
 	evidence         *evidence.Log
+	cases            *cases.Store
+	outcomes         *outcomes.Store
 	features         *features.Runtime
 	telco            telco.Connector
 	keys             map[string]auth.Credential
@@ -53,13 +59,17 @@ type keyLock struct {
 	refs int
 }
 
-func New(s *store.Store, e *engine.Client, l *evidence.Log, k map[string]auth.Credential, c config.Config, f *features.Runtime, t telco.Connector) *API {
-	a := &API{idem: s, engine: e, evidence: l, features: f, telco: t, keys: k, cfg: c, mux: http.NewServeMux(), rates: map[string]rateWindow{}, keyLocks: map[string]*keyLock{}, decisionCounters: map[string]uint64{}}
+func New(s *store.Store, e *engine.Client, l *evidence.Log, cs *cases.Store, o *outcomes.Store, k map[string]auth.Credential, c config.Config, f *features.Runtime, t telco.Connector) *API {
+	a := &API{idem: s, engine: e, evidence: l, cases: cs, outcomes: o, features: f, telco: t, keys: k, cfg: c, mux: http.NewServeMux(), rates: map[string]rateWindow{}, keyLocks: map[string]*keyLock{}, decisionCounters: map[string]uint64{}}
 	a.mux.HandleFunc("GET /healthz", a.health)
 	a.mux.HandleFunc("GET /readyz", a.ready)
 	a.mux.HandleFunc("GET /metrics", a.metrics)
 	a.mux.HandleFunc("POST /v1/assess", a.assess)
 	a.mux.HandleFunc("GET /v1/evidence/verify", a.verify)
+	a.mux.HandleFunc("POST /v1/outcomes", a.submitOutcome)
+	a.mux.HandleFunc("GET /v1/cases", a.listCases)
+	a.mux.HandleFunc("POST /v1/cases/{caseID}/actions", a.applyCaseAction)
+	a.mux.HandleFunc("GET /v1/cases/{caseID}/evidence", a.exportCaseEvidence)
 	return a
 }
 func (a *API) ServeHTTP(w http.ResponseWriter, r *http.Request) { a.mux.ServeHTTP(w, r) }
@@ -67,6 +77,21 @@ func write(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
+}
+
+func signedCredential(r *http.Request, body []byte, keys map[string]auth.Credential) (auth.Credential, bool) {
+	credential, ok := auth.Verify(r, body, keys)
+	if !ok {
+		return auth.Credential{}, false
+	}
+	timestamp, err := strconv.ParseInt(r.Header.Get("X-Kinga-Timestamp"), 10, 64)
+	if err != nil || time.Since(time.Unix(timestamp, 0)) > 5*time.Minute || time.Until(time.Unix(timestamp, 0)) > 5*time.Minute {
+		return auth.Credential{}, false
+	}
+	if r.Header.Get("X-Kinga-Tenant") != "" && r.Header.Get("X-Kinga-Tenant") != credential.Tenant {
+		return auth.Credential{}, false
+	}
+	return credential, true
 }
 func (a *API) health(w http.ResponseWriter, _ *http.Request) {
 	write(w, 200, map[string]string{"status": "ok", "mode": "shadow"})
@@ -220,6 +245,12 @@ func (a *API) assess(w http.ResponseWriter, r *http.Request) {
 		write(w, 503, map[string]string{"error": "evidence_unavailable"})
 		return
 	}
+	if result.Decision != "ALLOW" {
+		if _, err := a.cases.OpenCase(cred.Tenant, result); err != nil {
+			write(w, http.StatusServiceUnavailable, map[string]string{"error": "case_store_unavailable"})
+			return
+		}
+	}
 	_ = eid
 	response, _ := json.Marshal(result)
 	a.idem.Put(key, body, response)
@@ -306,4 +337,192 @@ func (a *API) verify(w http.ResponseWriter, _ *http.Request) {
 		return
 	}
 	write(w, 200, map[string]any{"status": "verified", "records_checked": n, "chain_head": head})
+}
+
+func (a *API) submitOutcome(w http.ResponseWriter, r *http.Request) {
+	mediaType, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	if mediaType != "application/json" {
+		write(w, http.StatusUnsupportedMediaType, map[string]string{"error": "content_type_must_be_application_json"})
+		return
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, 16*1024+1))
+	if err != nil || len(body) > 16*1024 {
+		write(w, http.StatusRequestEntityTooLarge, map[string]string{"error": "request_too_large"})
+		return
+	}
+	credential, ok := auth.Verify(r, body, a.keys)
+	if !ok {
+		write(w, http.StatusUnauthorized, map[string]string{"error": "invalid_api_credentials_or_signature"})
+		return
+	}
+	timestamp, err := strconv.ParseInt(r.Header.Get("X-Kinga-Timestamp"), 10, 64)
+	if err != nil || time.Since(time.Unix(timestamp, 0)) > 5*time.Minute || time.Until(time.Unix(timestamp, 0)) > 5*time.Minute {
+		write(w, http.StatusUnauthorized, map[string]string{"error": "signature_timestamp_outside_window"})
+		return
+	}
+	var submission outcomes.Submission
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&submission); err != nil {
+		write(w, http.StatusBadRequest, map[string]string{"error": "invalid_outcome", "detail": err.Error()})
+		return
+	}
+	var extra any
+	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+		write(w, http.StatusBadRequest, map[string]string{"error": "request_must_contain_one_json_object"})
+		return
+	}
+	if submission.SubmissionID == "" || !eventID.MatchString(submission.SubmissionID) || submission.TenantEventID == "" || !eventID.MatchString(submission.TenantEventID) || submission.EvidenceID == "" || len(submission.EvidenceID) > 160 || submission.Reviewer == "" || len(submission.Reviewer) > 128 || len(submission.Notes) > 512 || submission.ObservedAt.IsZero() {
+		write(w, http.StatusUnprocessableEntity, map[string]string{"error": "required_outcome_fields_missing_or_invalid"})
+		return
+	}
+	if !oneOf(submission.Label, "confirmed_fraud", "false_positive", "legitimate", "unknown") {
+		write(w, http.StatusUnprocessableEntity, map[string]string{"error": "unsupported_outcome_label"})
+		return
+	}
+	if submission.LossKES != nil && (*submission.LossKES < 0 || math.IsNaN(*submission.LossKES) || math.IsInf(*submission.LossKES, 0)) {
+		write(w, http.StatusUnprocessableEntity, map[string]string{"error": "loss_kes_must_be_finite_and_non_negative"})
+		return
+	}
+	if submission.ObservedAt.After(time.Now().Add(5 * time.Minute)) {
+		write(w, http.StatusUnprocessableEntity, map[string]string{"error": "observed_at_in_future"})
+		return
+	}
+	if r.Header.Get("X-Kinga-Tenant") != "" && r.Header.Get("X-Kinga-Tenant") != credential.Tenant {
+		write(w, http.StatusForbidden, map[string]string{"error": "tenant_header_mismatch"})
+		return
+	}
+	if !a.allow(credential.Tenant) {
+		w.Header().Set("Retry-After", "60")
+		write(w, http.StatusTooManyRequests, map[string]string{"error": "tenant_rate_limit_exceeded"})
+		return
+	}
+	if r.Header.Get("Idempotency-Key") != submission.SubmissionID {
+		write(w, http.StatusBadRequest, map[string]string{"error": "idempotency_key_must_match_submission_id"})
+		return
+	}
+	record, err := a.outcomes.Append(credential.Tenant, submission)
+	if err != nil {
+		if errors.Is(err, outcomes.ErrUnavailable) {
+			write(w, http.StatusServiceUnavailable, map[string]string{"error": "outcome_store_unavailable"})
+			return
+		}
+		write(w, http.StatusConflict, map[string]string{"error": "outcome_submission_conflict", "detail": err.Error()})
+		return
+	}
+	w.Header().Set("X-Kinga-Tenant", credential.Tenant)
+	write(w, http.StatusAccepted, record)
+}
+
+func (a *API) listCases(w http.ResponseWriter, r *http.Request) {
+	credential, ok := signedCredential(r, nil, a.keys)
+	if !ok {
+		write(w, http.StatusUnauthorized, map[string]string{"error": "invalid_api_credentials_or_signature"})
+		return
+	}
+	if !a.allow(credential.Tenant) {
+		w.Header().Set("Retry-After", "60")
+		write(w, http.StatusTooManyRequests, map[string]string{"error": "tenant_rate_limit_exceeded"})
+		return
+	}
+	status := r.URL.Query().Get("status")
+	if status != "" && !oneOf(status, "open", "assigned", "released", "held") {
+		write(w, http.StatusBadRequest, map[string]string{"error": "unsupported_case_status"})
+		return
+	}
+	limit := 50
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed < 1 || parsed > 100 {
+			write(w, http.StatusBadRequest, map[string]string{"error": "limit_must_be_between_1_and_100"})
+			return
+		}
+		limit = parsed
+	}
+	w.Header().Set("X-Kinga-Tenant", credential.Tenant)
+	write(w, http.StatusOK, map[string]any{"cases": a.cases.List(credential.Tenant, status, limit)})
+}
+
+func (a *API) applyCaseAction(w http.ResponseWriter, r *http.Request) {
+	body, err := io.ReadAll(io.LimitReader(r.Body, 8*1024+1))
+	if err != nil || len(body) > 8*1024 {
+		write(w, http.StatusRequestEntityTooLarge, map[string]string{"error": "request_too_large"})
+		return
+	}
+	credential, ok := signedCredential(r, body, a.keys)
+	if !ok {
+		write(w, http.StatusUnauthorized, map[string]string{"error": "invalid_api_credentials_or_signature"})
+		return
+	}
+	if !a.allow(credential.Tenant) {
+		w.Header().Set("Retry-After", "60")
+		write(w, http.StatusTooManyRequests, map[string]string{"error": "tenant_rate_limit_exceeded"})
+		return
+	}
+	var request struct {
+		ActionID string `json:"action_id"`
+		Type     string `json:"type"`
+		Reviewer string `json:"reviewer"`
+		Assignee string `json:"assignee,omitempty"`
+		Note     string `json:"note,omitempty"`
+	}
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&request); err != nil {
+		write(w, http.StatusBadRequest, map[string]string{"error": "invalid_case_action", "detail": err.Error()})
+		return
+	}
+	var extra any
+	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+		write(w, http.StatusBadRequest, map[string]string{"error": "request_must_contain_one_json_object"})
+		return
+	}
+	action := cases.Action{ActionID: request.ActionID, Type: request.Type, Reviewer: request.Reviewer, Assignee: request.Assignee, Note: request.Note}
+	if err := cases.ValidateAction(action); err != nil {
+		write(w, http.StatusUnprocessableEntity, map[string]string{"error": err.Error()})
+		return
+	}
+	if r.Header.Get("Idempotency-Key") != action.ActionID {
+		write(w, http.StatusBadRequest, map[string]string{"error": "idempotency_key_must_match_action_id"})
+		return
+	}
+	updated, err := a.cases.Apply(credential.Tenant, r.PathValue("caseID"), action)
+	if err != nil {
+		status := http.StatusConflict
+		if errors.Is(err, os.ErrNotExist) {
+			status = http.StatusNotFound
+		} else if errors.Is(err, cases.ErrUnavailable) {
+			status = http.StatusServiceUnavailable
+		}
+		write(w, status, map[string]string{"error": "case_action_rejected", "detail": err.Error()})
+		return
+	}
+	w.Header().Set("X-Kinga-Tenant", credential.Tenant)
+	write(w, http.StatusOK, updated)
+}
+
+func (a *API) exportCaseEvidence(w http.ResponseWriter, r *http.Request) {
+	credential, ok := signedCredential(r, nil, a.keys)
+	if !ok {
+		write(w, http.StatusUnauthorized, map[string]string{"error": "invalid_api_credentials_or_signature"})
+		return
+	}
+	if !a.allow(credential.Tenant) {
+		w.Header().Set("Retry-After", "60")
+		write(w, http.StatusTooManyRequests, map[string]string{"error": "tenant_rate_limit_exceeded"})
+		return
+	}
+	caseRecord, err := a.cases.Get(credential.Tenant, r.PathValue("caseID"))
+	if err != nil {
+		write(w, http.StatusNotFound, map[string]string{"error": "case_not_found"})
+		return
+	}
+	evidenceRecord, err := a.evidence.Find(credential.Tenant, caseRecord.EvidenceID)
+	if err != nil {
+		write(w, http.StatusServiceUnavailable, map[string]string{"error": "evidence_unavailable_or_invalid"})
+		return
+	}
+	w.Header().Set("X-Kinga-Tenant", credential.Tenant)
+	w.Header().Set("Content-Disposition", "attachment; filename=case-evidence.json")
+	write(w, http.StatusOK, map[string]any{"export_version": "1", "generated_at": time.Now().UTC(), "case": caseRecord, "evidence": evidenceRecord})
 }

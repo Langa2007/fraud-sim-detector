@@ -80,6 +80,48 @@ func (l *Log) Verify() (uint64, string, error) {
 		previous = r.Hash
 	}
 }
+
+// Find returns a tenant-scoped evidence record after verifying the entire chain.
+func (l *Log) Find(tenant, evidenceID string) (Record, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	f, err := os.Open(l.path)
+	if err != nil {
+		return Record{}, err
+	}
+	defer f.Close()
+	dec := json.NewDecoder(f)
+	var count uint64
+	previous := ""
+	var found *Record
+	for {
+		var record Record
+		err = dec.Decode(&record)
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return Record{}, err
+		}
+		count++
+		if record.Sequence != count || record.PreviousHash != previous {
+			return Record{}, fmt.Errorf("evidence chain linkage mismatch at sequence %d", count)
+		}
+		sum := sha256.Sum256(canonical(record))
+		if hex.EncodeToString(sum[:]) != record.Hash {
+			return Record{}, fmt.Errorf("evidence chain hash mismatch at sequence %d", count)
+		}
+		if record.Tenant == tenant && record.EvidenceID == evidenceID {
+			copy := record
+			found = &copy
+		}
+		previous = record.Hash
+	}
+	if found == nil {
+		return Record{}, os.ErrNotExist
+	}
+	return *found, nil
+}
 func canonical(r Record) []byte { r.Hash = ""; b, _ := json.Marshal(r); return b }
 func (l *Log) verifyExisting() error {
 	if _, e := l.f.Seek(0, 0); e != nil {
