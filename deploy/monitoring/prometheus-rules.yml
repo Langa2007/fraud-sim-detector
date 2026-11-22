@@ -1,0 +1,24 @@
+groups:
+  - name: kinga-slo
+    interval: 30s
+    rules:
+      - record: kinga:assessment_latency_p99_ms:5m
+        expr: histogram_quantile(0.99, sum by (le) (rate(kinga_assessment_latency_milliseconds_bucket[5m])))
+      - record: kinga:http_availability:5m
+        expr: 1 - (sum(rate(kinga_http_requests_total{status=~"5..",route!="/metrics"}[5m])) / clamp_min(sum(rate(kinga_http_requests_total{route!="/metrics"}[5m])), 1e-9))
+      - alert: KingaAssessmentLatencyBurn
+        expr: kinga:assessment_latency_p99_ms:5m > 150
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Kinga assessment p99 exceeds 150 ms
+          runbook: docs/runbooks/phase-four-reliability.md
+      - alert: KingaAvailabilityBelowTarget
+        expr: kinga:http_availability:5m < 0.9995
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: Kinga request availability is below the 99.95% target
+          runbook: docs/runbooks/phase-four-reliability.md

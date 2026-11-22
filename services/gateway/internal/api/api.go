@@ -57,9 +57,11 @@ type API struct {
 	keyLocks         map[string]*keyLock
 	metricMu         sync.Mutex
 	decisionCounters map[string]uint64
+	httpRequests     map[string]uint64
 	assessCount      uint64
 	degradedCount    uint64
 	latencyTotalMS   uint64
+	latencyBuckets   [8]uint64
 }
 type rateWindow struct {
 	start time.Time
@@ -89,6 +91,7 @@ func New(s *store.Store, e *engine.Client, l *evidence.Log, cs *cases.Store, o *
 		rates:            map[string]rateWindow{},
 		keyLocks:         map[string]*keyLock{},
 		decisionCounters: map[string]uint64{},
+		httpRequests:     map[string]uint64{},
 	}
 	a.mux.HandleFunc("GET /healthz", a.health)
 	a.mux.HandleFunc("GET /readyz", a.ready)
@@ -121,7 +124,41 @@ func (a *API) SetGraphRuntime(runtime *graph.Runtime) { a.graph = runtime }
 // SetMuleDetector sets or overrides the agent float and mule risk detector.
 func (a *API) SetMuleDetector(detector *mule.Detector) { a.mule = detector }
 
-func (a *API) ServeHTTP(w http.ResponseWriter, r *http.Request) { a.mux.ServeHTTP(w, r) }
+type statusWriter struct {
+	http.ResponseWriter
+	status int
+	wrote  bool
+}
+
+func (w *statusWriter) WriteHeader(status int) {
+	if w.wrote {
+		return
+	}
+	w.wrote = true
+	w.status = status
+	w.ResponseWriter.WriteHeader(status)
+}
+func (w *statusWriter) Write(body []byte) (int, error) {
+	if !w.wrote {
+		w.WriteHeader(http.StatusOK)
+	}
+	return w.ResponseWriter.Write(body)
+}
+func (a *API) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	tracked := &statusWriter{ResponseWriter: w}
+	a.mux.ServeHTTP(tracked, r)
+	if tracked.status == 0 {
+		tracked.status = http.StatusOK
+	}
+	route := r.Pattern
+	if route == "" {
+		route = "unmatched"
+	}
+	key := r.Method + "\x00" + route + "\x00" + strconv.Itoa(tracked.status)
+	a.metricMu.Lock()
+	a.httpRequests[key]++
+	a.metricMu.Unlock()
+}
 func write(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
@@ -200,6 +237,13 @@ func (a *API) metrics(w http.ResponseWriter, _ *http.Request) {
 	fmt.Fprintf(w, "kinga_assessment_degraded_total %d\n", a.degradedCount)
 	io.WriteString(w, "# TYPE kinga_assessment_latency_ms_sum counter\n")
 	fmt.Fprintf(w, "kinga_assessment_latency_ms_sum %d\n", a.latencyTotalMS)
+	io.WriteString(w, "# HELP kinga_assessment_latency_milliseconds Assessment latency in milliseconds.\n# TYPE kinga_assessment_latency_milliseconds histogram\n")
+	bounds := [...]int{10, 25, 50, 75, 100, 150, 250, 500}
+	for i, bound := range bounds {
+		fmt.Fprintf(w, "kinga_assessment_latency_milliseconds_bucket{le=\"%d\"} %d\n", bound, a.latencyBuckets[i])
+	}
+	fmt.Fprintf(w, "kinga_assessment_latency_milliseconds_bucket{le=\"+Inf\"} %d\n", a.assessCount)
+	fmt.Fprintf(w, "kinga_assessment_latency_milliseconds_sum %d\nkinga_assessment_latency_milliseconds_count %d\n", a.latencyTotalMS, a.assessCount)
 	io.WriteString(w, "# TYPE kinga_decisions_total counter\n")
 	keys := make([]string, 0, len(a.decisionCounters))
 	for k := range a.decisionCounters {
@@ -208,6 +252,18 @@ func (a *API) metrics(w http.ResponseWriter, _ *http.Request) {
 	sort.Strings(keys)
 	for _, k := range keys {
 		fmt.Fprintf(w, "kinga_decisions_total{decision=%q} %d\n", k, a.decisionCounters[k])
+	}
+	io.WriteString(w, "# TYPE kinga_http_requests_total counter\n")
+	keys = keys[:0]
+	for k := range a.httpRequests {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		parts := strings.Split(key, "\x00")
+		if len(parts) == 3 {
+			fmt.Fprintf(w, "kinga_http_requests_total{method=%q,route=%q,status=%q} %d\n", parts[0], parts[1], parts[2], a.httpRequests[key])
+		}
 	}
 }
 
@@ -400,6 +456,12 @@ func (a *API) recordDecision(r engine.Result) {
 	a.assessCount++
 	a.decisionCounters[r.Decision]++
 	a.latencyTotalMS += uint64(max(r.LatencyMS, 0))
+	bounds := [...]int64{10, 25, 50, 75, 100, 150, 250, 500}
+	for i, bound := range bounds {
+		if r.LatencyMS <= bound {
+			a.latencyBuckets[i]++
+		}
+	}
 	if r.Degraded {
 		a.degradedCount++
 	}

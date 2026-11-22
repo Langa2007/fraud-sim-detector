@@ -6,9 +6,10 @@ import (
 )
 
 type Config struct {
-	ListenAddr, APIKeys, EvidencePath, OutcomePath, CasePath, IdempotencyTTL, EngineURL, TelcoSimulatorPath string
-	ConsortiumPath, ConsortiumAdminToken, TokenizerURL, TokenizerCallerKey, GraphFeaturesPath               string
-	ConsortiumMinConfirmations                                                                              int
+	ListenAddr, APIKeys, EvidencePath, OutcomePath, CasePath, IdempotencyTTL, EngineURL, TelcoSimulatorPath       string
+	ConsortiumPath, ConsortiumAdminToken, TokenizerURL, TokenizerCallerKey, GraphFeaturesPath                     string
+	CAMARAEndpoint, CAMARAToken, AirtelCAMARAEndpoint, AirtelCAMARAToken, TelkomCAMARAEndpoint, TelkomCAMARAToken string
+	ConsortiumMinConfirmations                                                                                    int
 }
 
 func env(k, d string) string {
@@ -38,8 +39,14 @@ func Load() Config {
 		TokenizerURL:               env("KINGA_TOKENIZER_URL", "http://127.0.0.1:8091"),
 		TokenizerCallerKey:         os.Getenv("KINGA_TOKENIZER_CALLER_KEY"),
 		GraphFeaturesPath:          os.Getenv("KINGA_GRAPH_FEATURES_PATH"),
+		CAMARAEndpoint:             os.Getenv("KINGA_CAMARA_ENDPOINT"),
+		CAMARAToken:                os.Getenv("KINGA_CAMARA_TOKEN"),
+		AirtelCAMARAEndpoint:       os.Getenv("KINGA_AIRTEL_CAMARA_ENDPOINT"),
+		AirtelCAMARAToken:          os.Getenv("KINGA_AIRTEL_CAMARA_TOKEN"),
+		TelkomCAMARAEndpoint:       os.Getenv("KINGA_TELKOM_CAMARA_ENDPOINT"),
+		TelkomCAMARAToken:          os.Getenv("KINGA_TELKOM_CAMARA_TOKEN"),
 		IdempotencyTTL:             env("KINGA_IDEMPOTENCY_TTL", "24h"),
 		EngineURL:                  env("KINGA_ENGINE_URL", "http://127.0.0.1:8090"),
-		TelcoSimulatorPath:         env("KINGA_TELCO_SIMULATOR_PATH", "testdata/telco/simulator.json"),
+		TelcoSimulatorPath:         os.Getenv("KINGA_TELCO_SIMULATOR_PATH"),
 	}
 }

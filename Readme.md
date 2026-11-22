@@ -293,9 +293,7 @@ Large tier-1 banks come later, via the consortium (their confirmed indicators ar
 
 ---
 
-## 15. Sources
-
-## Phase 3 implementation status
+## 15. Phase 3 implementation status
 
 The repository now contains a Rust network/tenant-scoped HMAC tokenizer, signed Go APIs for consortium contributions and thresholded lookups, a hash-chained indicator ledger with TTL confidence decay and dispute/removal actions, a token-only Python graph batch builder, and Go serving for graph snapshots. See the [Phase 3 governance pack](./docs/governance/phase-three-consortium.md) and [graph pipeline guide](./docs/graph/phase-three-graph.md).
 
@@ -303,7 +301,13 @@ This is a technical pilot foundation. Do not treat it as a live consortium: sign
 
 Member endpoints use the existing HMAC request headers. `POST /v1/tokenize` accepts `namespace`, `value`, and optional `scope` (`network` or `tenant`); it returns only the token and key version. `POST /v1/consortium/indicators` accepts namespace, token, confidence, and optional TTL hours. `GET /v1/consortium/indicators/{namespace}/{token}` returns a match only after the configured independent-member threshold. Members can dispute their contributions; governance resolves through the separately configured admin token. `GET /v1/graph/{namespace}/{token}` serves a batch feature only when its independent-tenant count meets the same threshold.
 
-## 16. Sources
+## 16. Phase 4 implementation status
+
+Phase 4 groundwork adds Prometheus HTTP/assessment latency metrics, SLO recording and alert rules, a Grafana dashboard, graceful gateway shutdown, ordered multi-provider CAMARA-compatible failover, Ed25519 evidence-chain anchoring, an on-prem Rust engine guide, and standard-library Go/Python/JavaScript SDKs. See [Phase 4 readiness](./docs/phase-four-readiness.md), the [reliability runbook](./docs/runbooks/phase-four-reliability.md), [evidence anchoring guide](./docs/runbooks/evidence-anchoring.md), and [SDK guide](./sdk/README.md).
+
+The remaining scale and assurance gates are explicit: local JSONL state blocks safe horizontal replicas; no Redpanda/NATS-to-ClickHouse analytics path is connected; provider-specific telco APIs, regional currency-aware models, independent penetration testing/certification, 90-day SLO evidence, revenue coverage, and a second revenue segment need external work. The on-prem artifact is a private HTTP daemon, not a stable library/gRPC contract. No HA, security certification, regional lift, or commercial gate is claimed.
+
+## 17. Sources
 
 - Business Daily, bank fraud losses (CBK data): https://www.businessdailyafrica.com/bd/corporate/companies/hackers-steal-sh1-59-billion-from-kenya-bank-customers-5186982
 - Khusoko, CBK fraud breakdown: https://khusoko.com/2025/09/15/kenyas-banking-sector-faces-cybersecurity-reckoning-as-fraud-losses-quadruple/

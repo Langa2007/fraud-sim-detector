@@ -10,7 +10,7 @@ export const options = {
   ],
   thresholds: {
     http_req_duration: ['p(99)<150'], // Phase 1 gate: p99 latency <= 150 ms
-    http_req_failed: ['rate<0.01'],    // Error rate < 1%
+    http_req_failed: ['rate<0.001'],   // Error rate < 0.1%
   },
 };
 

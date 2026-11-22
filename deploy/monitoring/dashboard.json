@@ -1,0 +1,11 @@
+{
+  "title": "Kinga service health",
+  "schemaVersion": 39,
+  "refresh": "30s",
+  "panels": [
+    {"id": 1, "type": "timeseries", "title": "Assessment p99 latency (ms)", "targets": [{"expr": "kinga:assessment_latency_p99_ms:5m", "legendFormat": "p99"}], "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0}},
+    {"id": 2, "type": "timeseries", "title": "HTTP availability (5m)", "targets": [{"expr": "kinga:http_availability:5m", "legendFormat": "availability"}], "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0}},
+    {"id": 3, "type": "timeseries", "title": "Assessment degradation rate", "targets": [{"expr": "sum(rate(kinga_assessment_degraded_total[5m])) / clamp_min(sum(rate(kinga_assessments_total[5m])), 1e-9)", "legendFormat": "degraded"}], "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8}},
+    {"id": 4, "type": "timeseries", "title": "Decision volume by outcome", "targets": [{"expr": "sum by (decision) (rate(kinga_decisions_total[5m]))", "legendFormat": "{{decision}}"}], "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8}}
+  ]
+}

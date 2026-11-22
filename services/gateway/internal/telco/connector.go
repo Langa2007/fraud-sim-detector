@@ -21,6 +21,52 @@ type Connector interface {
 	Lookup(context.Context, string) (Signal, error)
 }
 
+// Provider identifies a configured network adapter without placing provider
+// credentials or subscriber data in logs.
+type Provider struct {
+	Name      string
+	Connector Connector
+}
+
+// Failover tries providers in configured priority order and stops at the first
+// valid signal. It never sends requests to providers concurrently.
+type Failover struct{ providers []Provider }
+
+func NewFailover(providers ...Provider) (*Failover, error) {
+	seen := map[string]bool{}
+	for _, provider := range providers {
+		if provider.Name == "" || provider.Connector == nil || seen[provider.Name] {
+			return nil, fmt.Errorf("invalid or duplicate telco provider")
+		}
+		seen[provider.Name] = true
+	}
+	if len(providers) == 0 {
+		return nil, fmt.Errorf("at least one telco provider is required")
+	}
+	return &Failover{providers: append([]Provider(nil), providers...)}, nil
+}
+
+func (f *Failover) Lookup(ctx context.Context, msisdn string) (Signal, error) {
+	var failures []string
+	for _, provider := range f.providers {
+		if err := ctx.Err(); err != nil {
+			return Signal{Available: false, Source: "provider_chain"}, err
+		}
+		signal, err := provider.Connector.Lookup(ctx, msisdn)
+		if err == nil && signal.Available {
+			signal.Source = provider.Name
+			return signal, nil
+		}
+		if err != nil {
+			failures = append(failures, provider.Name+": unavailable")
+		}
+	}
+	if len(failures) > 0 {
+		return Signal{Available: false, Source: "provider_chain"}, fmt.Errorf("all configured telco providers unavailable (%s)", strings.Join(failures, ", "))
+	}
+	return Signal{Available: false, Source: "provider_chain"}, nil
+}
+
 type Simulator struct {
 	swaps map[string]int
 }

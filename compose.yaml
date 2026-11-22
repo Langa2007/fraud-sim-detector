@@ -12,6 +12,11 @@ services:
     tmpfs: [/tmp]
     security_opt: [no-new-privileges:true]
     cap_drop: [ALL]
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 128M
     restart: unless-stopped
   decision-engine:
     build:
@@ -23,6 +28,15 @@ services:
       KINGA_MODEL_CARD_PATH: ${KINGA_MODEL_CARD_PATH:-}
     volumes:
       - ./models:/app/models:ro
+    read_only: true
+    tmpfs: [/tmp]
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    deploy:
+      resources:
+        limits:
+          cpus: "1.00"
+          memory: 1G
     restart: unless-stopped
   kinga:
     build:
@@ -34,7 +48,13 @@ services:
       KINGA_TOKENIZER_URL: http://tokenizer:8091
       KINGA_TOKENIZER_CALLER_KEY: ${KINGA_TOKENIZER_CALLER_KEY:?set a private gateway caller key}
       KINGA_TELCO_SIMULATOR_PATH: /app/testdata/telco/simulator.json
-      KINGA_API_KEYS: ${KINGA_API_KEYS:-demo:demo-key:demo-secret}
+      KINGA_API_KEYS: ${KINGA_API_KEYS:?set tenant API keys}
+      KINGA_CAMARA_ENDPOINT: ${KINGA_CAMARA_ENDPOINT:-}
+      KINGA_CAMARA_TOKEN: ${KINGA_CAMARA_TOKEN:-}
+      KINGA_AIRTEL_CAMARA_ENDPOINT: ${KINGA_AIRTEL_CAMARA_ENDPOINT:-}
+      KINGA_AIRTEL_CAMARA_TOKEN: ${KINGA_AIRTEL_CAMARA_TOKEN:-}
+      KINGA_TELKOM_CAMARA_ENDPOINT: ${KINGA_TELKOM_CAMARA_ENDPOINT:-}
+      KINGA_TELKOM_CAMARA_TOKEN: ${KINGA_TELKOM_CAMARA_TOKEN:-}
       KINGA_EVIDENCE_PATH: /data/evidence.jsonl
       KINGA_OUTCOME_PATH: /data/outcomes.jsonl
       KINGA_CASE_PATH: /data/cases.jsonl
@@ -48,6 +68,12 @@ services:
     tmpfs: [/tmp]
     security_opt: [no-new-privileges:true]
     cap_drop: [ALL]
+    stop_grace_period: 15s
+    deploy:
+      resources:
+        limits:
+          cpus: "1.00"
+          memory: 512M
     restart: unless-stopped
     depends_on: [decision-engine, tokenizer]
 volumes:
