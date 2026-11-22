@@ -11,10 +11,13 @@ use std::{
 
 type HmacSha256 = Hmac<Sha256>;
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct Keyring {
     active: String,
     keys: std::collections::HashMap<String, String>,
+    #[serde(default)]
+    previous: Vec<String>,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -27,6 +30,13 @@ struct Request {
 }
 #[derive(Debug, Serialize, PartialEq, Eq)]
 struct Token {
+    token: String,
+    key_version: String,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    rotation_aliases: Vec<TokenAlias>,
+}
+#[derive(Debug, Serialize, PartialEq, Eq)]
+struct TokenAlias {
     token: String,
     key_version: String,
 }
@@ -68,25 +78,92 @@ fn tokenize(keyring: &Keyring, request: Request) -> Result<Token, &'static str> 
             .ok_or("tenant_required")?,
         _ => return Err("invalid_scope"),
     };
-    let version = request.key_version.as_deref().unwrap_or(&keyring.active);
-    let secret = keyring.keys.get(version).ok_or("key_version_unavailable")?;
-    let key = hex::decode(secret).map_err(|_| "invalid_keyring")?;
-    if key.len() < 32 {
-        return Err("invalid_keyring");
+    let token_for = |version: &str| -> Result<String, &'static str> {
+        let secret = keyring.keys.get(version).ok_or("key_version_unavailable")?;
+        let key = hex::decode(secret).map_err(|_| "invalid_keyring")?;
+        if key.len() != 32 {
+            return Err("invalid_keyring");
+        }
+        let mut mac = HmacSha256::new_from_slice(&key).map_err(|_| "invalid_keyring")?;
+        mac.update(b"kinga-token-v1\0");
+        mac.update(request.scope.as_bytes());
+        mac.update(b"\0");
+        mac.update(tenant.as_bytes());
+        mac.update(b"\0");
+        mac.update(request.namespace.as_bytes());
+        mac.update(b"\0");
+        mac.update(request.value.as_bytes());
+        Ok(hex::encode(mac.finalize().into_bytes()))
+    };
+    if let Some(version) = request.key_version.as_deref() {
+        if version != keyring.active && !keyring.previous.iter().any(|old| old == version) {
+            return Err("key_version_unavailable");
+        }
+        return Ok(Token {
+            token: token_for(version)?,
+            key_version: version.to_owned(),
+            rotation_aliases: Vec::new(),
+        });
     }
-    let mut mac = HmacSha256::new_from_slice(&key).map_err(|_| "invalid_keyring")?;
-    mac.update(b"kinga-token-v1\0");
-    mac.update(request.scope.as_bytes());
-    mac.update(b"\0");
-    mac.update(tenant.as_bytes());
-    mac.update(b"\0");
-    mac.update(request.namespace.as_bytes());
-    mac.update(b"\0");
-    mac.update(request.value.as_bytes());
+    let token = token_for(&keyring.active)?;
+    let mut rotation_aliases = Vec::with_capacity(keyring.previous.len());
+    for version in &keyring.previous {
+        rotation_aliases.push(TokenAlias {
+            token: token_for(version)?,
+            key_version: version.clone(),
+        });
+    }
     Ok(Token {
-        token: hex::encode(mac.finalize().into_bytes()),
-        key_version: version.to_owned(),
+        token,
+        key_version: keyring.active.clone(),
+        rotation_aliases,
     })
+}
+
+fn validate_keyring(keyring: &Keyring) -> Result<(), &'static str> {
+    if !valid_key_id(&keyring.active)
+        || keyring
+            .previous
+            .iter()
+            .any(|version| !valid_key_id(version))
+    {
+        return Err("invalid_key_version");
+    }
+    if keyring.previous.contains(&keyring.active) {
+        return Err("active_key_cannot_be_previous");
+    }
+    let mut versions = std::collections::HashSet::new();
+    versions.insert(keyring.active.as_str());
+    for version in &keyring.previous {
+        if !versions.insert(version.as_str()) {
+            return Err("duplicate_key_version");
+        }
+    }
+    if keyring.keys.len() != versions.len()
+        || keyring
+            .keys
+            .keys()
+            .any(|version| !versions.contains(version.as_str()))
+    {
+        return Err("keyring_must_contain_only_active_and_previous_keys");
+    }
+    let mut key_material = std::collections::HashSet::new();
+    for version in versions {
+        let encoded = keyring.keys.get(version).ok_or("key_version_missing")?;
+        let bytes = hex::decode(encoded).map_err(|_| "invalid_keyring")?;
+        if bytes.len() != 32 || !key_material.insert(bytes) {
+            return Err("invalid_or_reused_key_material");
+        }
+    }
+    Ok(())
+}
+
+fn valid_key_id(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
 }
 
 fn handle(mut stream: TcpStream, keyring: Arc<Keyring>, caller_secret: Arc<Vec<u8>>) {
@@ -199,6 +276,7 @@ fn constant_time_equal(a: &[u8], b: &[u8]) -> bool {
 fn main() {
     let raw = env::var("KINGA_TOKEN_KEYRING").expect("KINGA_TOKEN_KEYRING required");
     let keyring: Keyring = serde_json::from_str(&raw).expect("invalid token keyring JSON");
+    validate_keyring(&keyring).expect("invalid tokenizer keyring configuration");
     let caller = env::var("KINGA_TOKENIZER_CALLER_KEY")
         .expect("KINGA_TOKENIZER_CALLER_KEY required")
         .into_bytes();
@@ -236,6 +314,7 @@ mod tests {
         Keyring {
             active: "k1".into(),
             keys,
+            previous: Vec::new(),
         }
     }
 
@@ -283,7 +362,7 @@ mod tests {
 
     #[test]
     fn test_tokenize_key_rotation() {
-        let kr = test_keyring();
+        let mut kr = test_keyring();
 
         let req_k1 = Request {
             scope: "network".into(),
@@ -293,19 +372,42 @@ mod tests {
             key_version: Some("k1".into()),
         };
         let tok_k1 = tokenize(&kr, req_k1).unwrap();
+        kr.active = "k2".into();
+        kr.previous = vec!["k1".into()];
+        validate_keyring(&kr).unwrap();
+        let tok_rotated = tokenize(
+            &kr,
+            Request {
+                scope: "network".into(),
+                tenant: None,
+                namespace: "account".into(),
+                value: "acc_100".into(),
+                key_version: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(tok_rotated.key_version, "k2");
+        assert_eq!(tok_rotated.rotation_aliases.len(), 1);
+        assert_eq!(tok_rotated.rotation_aliases[0].key_version, "k1");
+        assert_ne!(tok_k1.token, tok_rotated.token);
+        assert_eq!(tok_k1.token, tok_rotated.rotation_aliases[0].token);
+    }
 
-        let req_k2 = Request {
-            scope: "network".into(),
-            tenant: None,
-            namespace: "account".into(),
-            value: "acc_100".into(),
-            key_version: Some("k2".into()),
-        };
-        let tok_k2 = tokenize(&kr, req_k2).unwrap();
-
-        assert_eq!(tok_k1.key_version, "k1");
-        assert_eq!(tok_k2.key_version, "k2");
-        assert_ne!(tok_k1.token, tok_k2.token);
+    #[test]
+    fn test_keyring_rejects_unknown_and_reused_keys() {
+        let mut kr = test_keyring();
+        kr.keys.insert("unexpected".into(), "aa".repeat(32));
+        assert_eq!(
+            validate_keyring(&kr).unwrap_err(),
+            "keyring_must_contain_only_active_and_previous_keys"
+        );
+        let mut kr = test_keyring();
+        kr.keys.insert("k2".into(), kr.keys["k1"].clone());
+        kr.previous.push("k2".into());
+        assert_eq!(
+            validate_keyring(&kr).unwrap_err(),
+            "invalid_or_reused_key_material"
+        );
     }
 
     #[test]
