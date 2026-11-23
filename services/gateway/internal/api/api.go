@@ -310,6 +310,25 @@ func (a *API) assess(w http.ResponseWriter, r *http.Request) {
 		write(w, 422, map[string]string{"error": "unsupported_event_type_or_channel"})
 		return
 	}
+	if ev.Transaction.Currency != "" && ev.Transaction.Currency != "KES" {
+		write(w, 422, map[string]string{"error": "transaction_currency_must_be_kes_until_fx_support"})
+		return
+	}
+	var transactionInput struct {
+		Transaction *struct {
+			Amount json.RawMessage `json:"amount"`
+		} `json:"transaction"`
+	}
+	_ = json.Unmarshal(body, &transactionInput)
+	amountPresent := transactionInput.Transaction != nil && len(transactionInput.Transaction.Amount) > 0 && string(bytes.TrimSpace(transactionInput.Transaction.Amount)) != "null"
+	if amountPresent && ev.Transaction.Currency != "KES" {
+		write(w, 422, map[string]string{"error": "transaction_amount_requires_kes_currency"})
+		return
+	}
+	if oneOf(ev.EventType, "funds_transfer", "loan_application", "agent_float_movement") && !amountPresent {
+		write(w, 422, map[string]string{"error": "transaction_amount_required"})
+		return
+	}
 	if ev.OccurredAt.After(time.Now().Add(5 * time.Minute)) {
 		write(w, 422, map[string]string{"error": "occurred_at_in_future"})
 		return

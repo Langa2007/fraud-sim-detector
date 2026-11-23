@@ -1,6 +1,11 @@
 {
   "schema_version": "kinga.features.v1",
-  "missing_values": "zero with an explicit known indicator for optional values",
+  "event_schema": "schemas/events/assessment.schema.json",
+  "purpose": "Ordered numeric model inputs; decision rules may also use gateway-enriched signals outside this model feature vector.",
+  "currency_policy": "Transaction amounts are KES-only until an approved FX conversion contract is implemented. funds_transfer, loan_application, and agent_float_movement require amount and currency. KES transaction amounts are represented directly as amount_kes.",
+  "time_policy": "occurred_at must be RFC3339 with an explicit offset. The timestamp's encoded local wall-clock hour is used for overnight; Kenyan events should retain +03:00 rather than be converted to Z before this feature is derived.",
+  "missing_values": "Missing sim_swap_age_minutes and account_age_days become zero and are distinguished by their *_known flags. Other absent optional numeric signals become zero and absent boolean signals become false; v1 does not distinguish missing from observed zero/false for those inputs.",
+  "versioning": "Feature order and meaning are immutable within a version. Incompatible changes require a new schema_version and matching trainer, model card, and Rust runtime updates.",
   "features": [
     {"name": "amount_kes", "source": "transaction.amount", "type": "float32", "unit": "KES"},
     {"name": "sim_swap_age_minutes", "source": "signals.sim_swap_age_minutes", "type": "float32", "unit": "minutes"},

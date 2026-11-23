@@ -115,6 +115,15 @@ func ConvertRow(row map[string]string) (*Event, error) {
 	}
 
 	amtStr := val("amount")
+	if val("currency") != "" && val("currency") != "KES" {
+		return nil, fmt.Errorf("currency %q is not supported; amounts must be KES until FX support exists", val("currency"))
+	}
+	if (ev.EventType == "funds_transfer" || ev.EventType == "loan_application" || ev.EventType == "agent_float_movement") && (amtStr == "" || val("currency") != "KES") {
+		return nil, fmt.Errorf("%s requires an amount and KES currency", ev.EventType)
+	}
+	if amtStr != "" && val("currency") != "KES" {
+		return nil, fmt.Errorf("amount requires explicit KES currency")
+	}
 	if amtStr != "" || val("currency") != "" || val("rail") != "" || val("beneficiary_ref") != "" {
 		tx := &Transaction{
 			Currency: val("currency"),

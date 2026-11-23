@@ -99,7 +99,7 @@
         },
         "currency": {
           "type": "string",
-          "pattern": "^[A-Z]{3}$"
+      "const": "KES"
         },
         "rail": {
           "type": "string"
@@ -187,5 +187,42 @@
         }
       }
     }
-  }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "transaction": {
+            "required": ["amount"]
+          }
+        },
+        "required": ["transaction"]
+      },
+      "then": {
+        "properties": {
+          "transaction": {
+            "required": ["currency"]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event_type": {
+            "enum": ["funds_transfer", "loan_application", "agent_float_movement"]
+          }
+        },
+        "required": ["event_type"]
+      },
+      "then": {
+        "required": ["transaction"],
+        "properties": {
+          "transaction": {
+            "required": ["amount", "currency"]
+          }
+        }
+      }
+    }
+  ]
 }
