@@ -1,4 +1,27 @@
 services:
+  redis:
+    image: redis:8.2-alpine
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "128mb", "--maxmemory-policy", "volatile-ttl"]
+    expose: ["6379"]
+    volumes: ["kinga-redis:/data"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 2s
+      retries: 10
+    restart: unless-stopped
+  stub-scorer:
+    profiles: ["latency-spike"]
+    build:
+      context: .
+      dockerfile: tools/latency-spike/Dockerfile
+    expose: ["8092"]
+    healthcheck:
+      test: ["CMD", "/stub-scorer", "-healthcheck"]
+      interval: 5s
+      timeout: 2s
+      retries: 10
+    restart: "no"
   tokenizer:
     build:
       context: .
@@ -44,7 +67,8 @@ services:
       dockerfile: deploy/compose/Dockerfile
     environment:
       KINGA_LISTEN_ADDR: :8080
-      KINGA_ENGINE_URL: http://decision-engine:8090
+      KINGA_ENGINE_URL: ${KINGA_ENGINE_URL:-http://decision-engine:8090}
+      KINGA_REDIS_URL: ${KINGA_REDIS_URL-redis://redis:6379/0}
       KINGA_TOKENIZER_URL: http://tokenizer:8091
       KINGA_TOKENIZER_CALLER_KEY: ${KINGA_TOKENIZER_CALLER_KEY:?set a private gateway caller key}
       KINGA_TELCO_SIMULATOR_PATH: /app/testdata/telco/simulator.json
@@ -75,6 +99,13 @@ services:
           cpus: "1.00"
           memory: 512M
     restart: unless-stopped
-    depends_on: [decision-engine, tokenizer]
+    depends_on:
+      decision-engine:
+        condition: service_started
+      tokenizer:
+        condition: service_started
+      redis:
+        condition: service_healthy
 volumes:
   kinga-evidence:
+  kinga-redis:

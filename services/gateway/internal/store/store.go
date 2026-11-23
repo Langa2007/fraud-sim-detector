@@ -9,6 +9,8 @@ import (
 	"time"
 )
 
+var ErrConflict = fmt.Errorf("idempotency key reused with a different payload")
+
 type Entry struct {
 	BodyHash string          `json:"body_hash"`
 	Response json.RawMessage `json:"response"`
@@ -18,6 +20,12 @@ type Store struct {
 	mu      sync.Mutex
 	entries map[string]Entry
 	ttl     time.Duration
+}
+
+// IdempotencyStore is the persistence contract used by the assessment gateway.
+type IdempotencyStore interface {
+	Get(key string, body []byte) (json.RawMessage, bool, error)
+	Put(key string, body, response []byte) error
 }
 
 func New(ttl string) *Store {
@@ -41,12 +49,13 @@ func (s *Store) Get(k string, body []byte) (json.RawMessage, bool, error) {
 		return nil, false, nil
 	}
 	if v.BodyHash != Hash(body) {
-		return nil, false, fmt.Errorf("idempotency key reused with a different payload")
+		return nil, false, ErrConflict
 	}
 	return v.Response, true, nil
 }
-func (s *Store) Put(k string, body, response []byte) {
+func (s *Store) Put(k string, body, response []byte) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.entries[k] = Entry{Hash(body), append(json.RawMessage(nil), response...), time.Now().Add(s.ttl)}
+	return nil
 }

@@ -74,7 +74,16 @@ func main() {
 	if len(keys) == 0 {
 		log.Print("WARNING: no KINGA_API_KEYS configured; assessments will be unauthorized")
 	}
-	h := api.New(store.New(cfg.IdempotencyTTL), engine.NewClient(cfg.EngineURL, 120*time.Millisecond), logStore, caseStore, outcomeStore, consortiumStore, keys, cfg, features.NewRuntime(), telcoConnector)
+	var idempotencyStore store.IdempotencyStore = store.New(cfg.IdempotencyTTL)
+	if cfg.RedisURL != "" {
+		redisStore, err := store.NewRedis(cfg.RedisURL, cfg.IdempotencyTTL)
+		if err != nil {
+			log.Fatalf("connect Redis idempotency store: %v", err)
+		}
+		defer redisStore.Close()
+		idempotencyStore = redisStore
+	}
+	h := api.New(idempotencyStore, engine.NewClient(cfg.EngineURL, 120*time.Millisecond), logStore, caseStore, outcomeStore, consortiumStore, keys, cfg, features.NewRuntime(), telcoConnector)
 	h.SetGraphRuntime(graphRuntime)
 	s := &http.Server{Addr: cfg.ListenAddr, Handler: h, ReadHeaderTimeout: 3 * time.Second, ReadTimeout: 5 * time.Second, WriteTimeout: 5 * time.Second, IdleTimeout: 60 * time.Second}
 	log.Printf("Kinga shadow gateway listening on %s", cfg.ListenAddr)

@@ -36,7 +36,7 @@ import (
 )
 
 type API struct {
-	idem             *store.Store
+	idem             store.IdempotencyStore
 	engine           *engine.Client
 	evidence         *evidence.Log
 	cases            *cases.Store
@@ -72,7 +72,7 @@ type keyLock struct {
 	refs int
 }
 
-func New(s *store.Store, e *engine.Client, l *evidence.Log, cs *cases.Store, o *outcomes.Store, co *consortium.Store, k map[string]auth.Credential, c config.Config, f *features.Runtime, t telco.Connector) *API {
+func New(s store.IdempotencyStore, e *engine.Client, l *evidence.Log, cs *cases.Store, o *outcomes.Store, co *consortium.Store, k map[string]auth.Credential, c config.Config, f *features.Runtime, t telco.Connector) *API {
 	a := &API{
 		idem:             s,
 		engine:           e,
@@ -350,8 +350,11 @@ func (a *API) assess(w http.ResponseWriter, r *http.Request) {
 	key := store.Key(cred.Tenant, ev.TenantEventID)
 	unlock := a.lockIdempotencyKey(key)
 	defer unlock()
-	if prev, found, err := a.idem.Get(key, body); err != nil {
+	if prev, found, err := a.idem.Get(key, body); errors.Is(err, store.ErrConflict) {
 		write(w, 409, map[string]string{"error": "idempotency_conflict"})
+		return
+	} else if err != nil {
+		write(w, 503, map[string]string{"error": "idempotency_store_unavailable"})
 		return
 	} else if found {
 		w.Header().Set("Idempotent-Replay", "true")
@@ -446,7 +449,10 @@ func (a *API) assess(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = eid
 	response, _ := json.Marshal(result)
-	a.idem.Put(key, body, response)
+	if err := a.idem.Put(key, body, response); err != nil {
+		write(w, 503, map[string]string{"error": "idempotency_store_unavailable"})
+		return
+	}
 	w.Header().Set("X-Kinga-Tenant", cred.Tenant)
 	write(w, 200, result)
 }
