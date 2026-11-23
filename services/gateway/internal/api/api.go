@@ -366,11 +366,12 @@ func (a *API) assess(w http.ResponseWriter, r *http.Request) {
 	started := time.Now()
 	ctx, cancel := context.WithTimeout(r.Context(), 100*time.Millisecond)
 	defer cancel()
+	providedSIMSwapAge := ev.Signals.SIMSwapAgeMinutes
 	telcoSignal, telcoErr := a.telco.Lookup(ctx, ev.Subject.MSISDN)
 	available := telcoErr == nil && telcoSignal.Available
 	ev.Signals.TelcoAvailable = &available
 	ev.Signals.TelcoSource = telcoSignal.Source
-	ev.Signals.SIMSwapAgeMinutes = nil
+	ev.Signals.SIMSwapAgeMinutes = providedSIMSwapAge
 	if available {
 		ev.Signals.SIMSwapAgeMinutes = telcoSignal.SIMSwapAgeMinutes
 	}
