@@ -2,9 +2,9 @@ syntax = "proto3";
 
 package kinga.v1;
 
-option go_package = "kinga/gen/go/kinga/v1;kingav1";
-
 import "kinga/v1/events.proto";
+
+option go_package = "kinga/gen/go/kinga/v1;kingav1";
 
 service AssessmentService {
   rpc Assess(AssessRequest) returns (AssessResponse);

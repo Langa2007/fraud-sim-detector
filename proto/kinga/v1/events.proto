@@ -2,9 +2,9 @@ syntax = "proto3";
 
 package kinga.v1;
 
-option go_package = "kinga/gen/go/kinga/v1;kingav1";
-
 import "google/protobuf/struct.proto";
+
+option go_package = "kinga/gen/go/kinga/v1;kingav1";
 
 message AssessmentEvent {
   string tenant_event_id = 1;
