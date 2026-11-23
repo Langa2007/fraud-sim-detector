@@ -9,7 +9,7 @@ from pathlib import Path
 import numpy as np
 from sklearn.ensemble import GradientBoostingClassifier
 from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import average_precision_score, confusion_matrix, precision_score, recall_score
+from sklearn.metrics import average_precision_score, confusion_matrix, precision_score
 
 
 FEATURE_NAMES = [
@@ -188,6 +188,9 @@ def main():
     onnx.checker.check_model(onnx_model)
     onnx.save_model(onnx_model, output / "model.onnx")
 
+    train_indices = np.arange(*train.indices(len(y)))
+    calibration_indices = np.arange(*calibration.indices(len(y)))
+    test_indices = np.arange(*test.indices(len(y)))
     model_version = "gbt-" + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     card = {
         "model_version": model_version, "feature_schema_version": "kinga.features.v1",
@@ -196,15 +199,15 @@ def main():
         "operating_threshold": threshold, "target_max_false_positive_rate": args.max_fpr,
         "training_window": {"first": events[train.start]["occurred_at"], "last": events[train.stop - 1]["occurred_at"]},
         "generated_at": datetime.now(timezone.utc).isoformat(),
-        "training_rows": int(len(train_indices := np.arange(*train.indices(len(y))))),
+        "training_rows": int(len(train_indices)),
     }
     (output / "model.json").write_text(json.dumps(card, indent=2) + "\n", encoding="utf-8")
 
     report = {
         "model_version": model_version, "feature_schema_version": card["feature_schema_version"],
         "dataset": {"events": int(len(y)), "fraud": int(y.sum()), "legitimate": int(len(y) - y.sum()),
-                    "train": int(len(train_indices)), "calibration": int(len(calibration_indices := np.arange(*calibration.indices(len(y))))),
-                    "held_out_test": int(len(test_indices := np.arange(*test.indices(len(y)))))},
+                    "train": int(len(train_indices)), "calibration": int(len(calibration_indices)),
+                    "held_out_test": int(len(test_indices))},
         "split": "chronological 60% train / 20% calibration / 20% held-out test",
         "calibration": card["calibration"], "target_max_false_positive_rate": args.max_fpr,
         "held_out_metrics": {**operating, "pr_auc": float(average_precision_score(y[test], test_scores)),
