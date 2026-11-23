@@ -1,0 +1,20 @@
+syntax = "proto3";
+
+package kinga.v1;
+
+option go_package = "kinga/gen/go/kinga/v1;kingav1";
+
+service TelcoSignalService {
+  rpc LookupSignals(LookupSignalsRequest) returns (LookupSignalsResponse);
+}
+
+message LookupSignalsRequest {
+  string tenant = 1;
+  string msisdn = 2;
+}
+
+message LookupSignalsResponse {
+  bool available = 1;
+  optional uint64 sim_swap_age_minutes = 2;
+  string source = 3;
+}

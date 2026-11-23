@@ -1,0 +1,39 @@
+syntax = "proto3";
+
+package kinga.v1;
+
+option go_package = "kinga/gen/go/kinga/v1;kingav1";
+
+service ConsortiumService {
+  rpc QueryIndicators(QueryIndicatorsRequest) returns (QueryIndicatorsResponse);
+  rpc ContributeIndicator(ContributeIndicatorRequest) returns (ContributeIndicatorResponse);
+}
+
+message QueryIndicatorsRequest {
+  string tenant = 1;
+  string subject_token = 2;
+  string indicator_type = 3;
+}
+
+message QueryIndicatorsResponse {
+  repeated ConsortiumIndicator indicators = 1;
+}
+
+message ContributeIndicatorRequest {
+  string tenant = 1;
+  ConsortiumIndicator indicator = 2;
+}
+
+message ContributeIndicatorResponse {
+  string contribution_id = 1;
+  bool accepted = 2;
+}
+
+message ConsortiumIndicator {
+  string indicator_type = 1;
+  string subject_token = 2;
+  uint32 confirmations = 3;
+  double confidence = 4;
+  string observed_at = 5;
+  string expires_at = 6;
+}

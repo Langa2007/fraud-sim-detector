@@ -1,0 +1,31 @@
+syntax = "proto3";
+
+package kinga.v1;
+
+option go_package = "kinga/gen/go/kinga/v1;kingav1";
+
+service TokenizerService {
+  rpc Tokenize(TokenizeRequest) returns (TokenizeResponse);
+  rpc Match(MatchRequest) returns (MatchResponse);
+}
+
+message TokenizeRequest {
+  string tenant = 1;
+  string network = 2;
+  string value = 3;
+}
+
+message TokenizeResponse {
+  string token = 1;
+  string key_version = 2;
+}
+
+message MatchRequest {
+  string tenant = 1;
+  string network = 2;
+  repeated string tokens = 3;
+}
+
+message MatchResponse {
+  repeated string matched_tokens = 1;
+}

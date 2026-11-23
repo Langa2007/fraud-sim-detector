@@ -1,0 +1,45 @@
+syntax = "proto3";
+
+package kinga.v1;
+
+option go_package = "kinga/gen/go/kinga/v1;kingav1";
+
+import "kinga/v1/events.proto";
+
+service AssessmentService {
+  rpc Assess(AssessRequest) returns (AssessResponse);
+}
+
+message AssessRequest {
+  string tenant = 1;
+  AssessmentEvent event = 2;
+  string idempotency_key = 3;
+}
+
+message AssessResponse {
+  Decision decision = 1;
+  string mode = 2;
+  double risk_score = 3;
+  string risk_band = 4;
+  repeated Reason reasons = 5;
+  repeated string recommended_actions = 6;
+  bool degraded = 7;
+  string tenant_event_id = 8;
+  string policy_version = 9;
+  optional string model_version = 10;
+  uint64 latency_ms = 11;
+  string evidence_id = 12;
+}
+
+enum Decision {
+  DECISION_UNSPECIFIED = 0;
+  DECISION_ALLOW = 1;
+  DECISION_STEP_UP = 2;
+  DECISION_HOLD = 3;
+}
+
+message Reason {
+  string code = 1;
+  string detail = 2;
+  double weight = 3;
+}

@@ -1,0 +1,38 @@
+syntax = "proto3";
+
+package kinga.v1;
+
+option go_package = "kinga/gen/go/kinga/v1;kingav1";
+
+import "google/protobuf/struct.proto";
+
+message AssessmentEvent {
+  string tenant_event_id = 1;
+  string event_type = 2;
+  string occurred_at = 3;
+  string channel = 4;
+  Subject subject = 5;
+  Device device = 6;
+  Transaction transaction = 7;
+  map<string, google.protobuf.Value> signals = 8;
+}
+
+message Subject {
+  string msisdn = 1;
+  string account_ref = 2;
+  string customer_ref = 3;
+}
+
+message Device {
+  string device_id = 1;
+  string ip = 2;
+  string app_version = 3;
+}
+
+message Transaction {
+  double amount = 1;
+  string currency = 2;
+  string rail = 3;
+  string beneficiary_type = 4;
+  string beneficiary_ref = 5;
+}

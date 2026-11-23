@@ -5,13 +5,27 @@ build:
     cargo build --manifest-path engine/Cargo.toml --release
     cargo build --manifest-path services/tokenizer/Cargo.toml --release
 
+gen:
+    buf generate --template proto/buf.gen.yaml proto
+
+lint:
+    test -z "$(gofmt -l $(git ls-files '*.go'))"
+    go vet ./...
+    cargo fmt --manifest-path engine/Cargo.toml -- --check
+    cargo fmt --manifest-path services/tokenizer/Cargo.toml -- --check
+    cargo clippy --locked --manifest-path engine/Cargo.toml -- -D warnings
+    cargo clippy --locked --manifest-path services/tokenizer/Cargo.toml -- -D warnings
+    ruff check tools sdk/python
+    node --check sdk/js/index.js
+    node --check console/src/main.js
+    buf format --diff --exit-code proto
+    buf lint proto
+    buf build proto
+
 test:
     go test -v ./...
     cargo test --manifest-path engine/Cargo.toml
     cargo test --manifest-path services/tokenizer/Cargo.toml
-
-lint:
-    go vet ./...
 
 up:
     docker compose up --build

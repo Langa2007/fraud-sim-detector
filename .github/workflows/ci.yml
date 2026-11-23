@@ -20,6 +20,8 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -45,8 +47,30 @@ jobs:
         with:
           node-version: "22"
 
+      - name: Set up Buf
+        uses: bufbuild/buf-setup-action@v1
+        with:
+          version: "1.50.0"
+
       - name: Install Python ML tooling
-        run: python -m pip install -r requirements-ml.txt
+        run: python -m pip install -r requirements-ml.txt ruff
+
+      - name: Lint and validate Protobuf contracts
+        run: |
+          buf format --diff --exit-code proto
+          buf lint proto
+          buf build proto
+
+      - name: Check Protobuf compatibility on pull requests
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_BRANCH: ${{ github.event.pull_request.base.ref }}
+        run: |
+          if git cat-file -e "origin/${BASE_BRANCH}:proto/buf.yaml" 2>/dev/null; then
+            buf breaking proto --against ".git#branch=${BASE_BRANCH}"
+          else
+            echo "No Protobuf baseline exists on ${BASE_BRANCH}; skipping the initial compatibility comparison."
+          fi
 
       - name: Check Go formatting
         run: test -z "$(gofmt -l $(git ls-files '*.go'))"
@@ -77,7 +101,12 @@ jobs:
           python -m py_compile sdk/python/kinga_client.py
 
       - name: Check JavaScript SDK syntax
-        run: node --check sdk/js/index.js
+        run: |
+          node --check sdk/js/index.js
+          node --check console/src/main.js
+
+      - name: Lint Python tools
+        run: ruff check tools sdk/python
 
       - name: Check shared model feature contract
         run: python tools/ml/check_feature_contract.py

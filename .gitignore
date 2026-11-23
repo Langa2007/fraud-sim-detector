@@ -4,6 +4,7 @@
 /cmd
 /engine/target/
 /services/tokenizer/target/
+/gen/
 /models/*
 !/models/README.md
 __pycache__/
